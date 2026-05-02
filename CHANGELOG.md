@@ -12,6 +12,18 @@ is a **minor** bump on this package until v1.0.
 ### Added
 
 - Project scaffold (Apache-2.0).
+- `Kino.Qx.Client` — Req-based wrapper around portal `/api/v1` endpoints
+  (`me/1`, `list_snippets/1`, `get_snippet/2`). Maps 401/404/429 to
+  `:unauthorized`, `:not_found`, `{:rate_limited, retry_after}`; network
+  errors to `{:network, reason}`. JSON keys converted to atoms via an
+  allow-list (no atom exhaustion).
+- `Kino.Qx.SmartCell` — Livebook Smart Cell registered as "Qx Snippet".
+  Inline JS + CSS (no external bundler). Token textbox, portal URL
+  textbox, Connect button, snippet dropdown, source-kind toggle.
+  **Security invariant:** `to_attrs/1` excludes the token AND identity;
+  only the persistable subset (base_url, snippet_name, source_kind,
+  source, selected_id) is written to the .livemd file. Tested.
+- `Kino.Qx.Application` — registers the Smart Cell on app start.
 - Initial decisions captured in iter-4 plan of the portal repo:
   - Package name `kino_qx` (livebook-dev convention).
   - Module: `Kino.Qx`. Smart cell: `Kino.Qx.SmartCell`.
