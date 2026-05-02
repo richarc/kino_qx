@@ -61,7 +61,7 @@ defmodule Kino.Qx.MixProject do
         "GitHub" => @source_url,
         "Portal" => "https://qxportal.dev"
       },
-      files: ~w(lib priv .formatter.exs mix.exs README* LICENSE* CHANGELOG*)
+      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG*)
     ]
   end
 
