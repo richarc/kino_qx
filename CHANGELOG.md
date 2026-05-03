@@ -9,8 +9,11 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-03
+
 ### Added
 
+- First Hex.pm release.
 - Project scaffold (Apache-2.0).
 - `Kino.Qx.Client` — Req-based wrapper around portal `/api/v1` endpoints
   (`me/1`, `list_snippets/1`, `get_snippet/2`). Maps 401/404/429 to
@@ -31,4 +34,5 @@ is a **minor** bump on this package until v1.0.
   - Default portal URL `https://qxportal.dev`.
   - Minimum Elixir `~> 1.17`.
 
-[Unreleased]: https://github.com/richarc/kino_qx/compare/HEAD..HEAD
+[Unreleased]: https://github.com/richarc/kino_qx/compare/v0.1.0..HEAD
+[0.1.0]: https://github.com/richarc/kino_qx/releases/tag/v0.1.0
