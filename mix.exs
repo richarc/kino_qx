@@ -1,7 +1,7 @@
 defmodule Kino.Qx.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/richarc/kino_qx"
 
   def project do
@@ -48,8 +48,10 @@ defmodule Kino.Qx.MixProject do
 
   defp description do
     """
-    A Livebook Smart Cell for the Qx Portal. Browse and inject your saved
-    OpenQASM / Elixir snippets into a notebook from the cell's dropdown.
+    Livebook Smart Cells for the Qx Portal. Browse and inject saved
+    OpenQASM / Elixir snippets into a notebook, OR transpile an
+    OpenQASM 3.0 circuit via the portal and submit it to IBM Quantum
+    directly — measurement counts render inline.
     """
   end
 
