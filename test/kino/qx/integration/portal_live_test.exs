@@ -36,19 +36,19 @@ defmodule Kino.Qx.Integration.PortalLiveTest do
   end
 
   test "POST /api/v1/transpile transpiles a Bell pair", %{config: config} do
+    # Match qxportal's documented example exactly — measurement is NOT
+    # accepted here (qiskit.qasm3.loads is strict). The IBM Sampler
+    # primitive adds measurement at submit time.
     qasm = """
     OPENQASM 3.0;
     include "stdgates.inc";
     qubit[2] q;
-    bit[2] c;
     h q[0];
     cx q[0], q[1];
-    c = measure q;
     """
 
     payload = %{
       qasm: qasm,
-      # Minimal coupling map / basis_gates good enough for a 2-qubit Bell pair
       coupling_map: [[0, 1], [1, 0]],
       basis_gates: ["id", "rz", "sx", "x", "cx"],
       optimization_level: 1,

@@ -61,11 +61,8 @@ defmodule Kino.Qx.StubClients do
     def fetch_backend_properties(%{__recorder__: pid} = config, name),
       do: Recorder.call(pid, :fetch_backend_properties, [config, name])
 
-    def open_session(%{__recorder__: pid} = config, backend, max_ttl \\ 3600),
-      do: Recorder.call(pid, :open_session, [config, backend, max_ttl])
-
-    def submit_sampler(%{__recorder__: pid} = config, qasm, backend, session_id),
-      do: Recorder.call(pid, :submit_sampler, [config, qasm, backend, session_id])
+    def submit_sampler(%{__recorder__: pid} = config, qasm, backend, shots \\ 4096),
+      do: Recorder.call(pid, :submit_sampler, [config, qasm, backend, shots])
 
     def poll_job(%{__recorder__: pid} = config, job_id),
       do: Recorder.call(pid, :poll_job, [config, job_id])
@@ -73,8 +70,13 @@ defmodule Kino.Qx.StubClients do
     def fetch_results(%{__recorder__: pid} = config, job_id),
       do: Recorder.call(pid, :fetch_results, [config, job_id])
 
-    def close_session(%{__recorder__: pid} = config, session_id),
-      do: Recorder.call(pid, :close_session, [config, session_id])
+    def cancel_job(%{__recorder__: pid} = config, job_id),
+      do: Recorder.call(pid, :cancel_job, [config, job_id])
+
+    def terminal_success?(status), do: status == "Completed"
+
+    def terminal_failure?(status),
+      do: status in ["Failed", "Cancelled", "Cancelled - Ran too long"]
   end
 
   defmodule Portal do

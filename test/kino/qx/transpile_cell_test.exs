@@ -34,6 +34,7 @@ defmodule Kino.Qx.TranspileCellTest do
       qasm_paste: "",
       save_qasm: false,
       optimization_level: 1,
+      shots: 4096,
       last_job_id: nil,
       last_counts: nil,
       # Transient — these are the secrets we must NOT leak
@@ -43,7 +44,6 @@ defmodule Kino.Qx.TranspileCellTest do
       backends_list: [],
       connected: false,
       identity: nil,
-      current_session_id: nil,
       current_status: "idle",
       current_status_detail: nil,
       current_job_id: nil,
@@ -78,17 +78,19 @@ defmodule Kino.Qx.TranspileCellTest do
     test "NEVER includes session/job-task transient state" do
       ctx =
         ctx_for(%{
-          current_session_id: "sess_abc",
+          current_job_id: "job_abc",
           polling_task_pid: self(),
           backends_list: [%{name: "ibm_brisbane", status: "active", num_qubits: 127}]
         })
 
       attrs = TranspileCell.to_attrs(ctx)
 
-      refute Map.has_key?(attrs, "current_session_id")
+      refute Map.has_key?(attrs, "current_job_id")
       refute Map.has_key?(attrs, "polling_task_pid")
       refute Map.has_key?(attrs, "backends_list")
-      refute attrs |> Jason.encode!() |> String.contains?("sess_abc")
+      # `current_job_id` is transient. `last_job_id` IS persisted (for
+      # re-attach awareness) so we don't check that the substring "job_"
+      # is absent — but the live `current_job_id` must not leak.
     end
   end
 
@@ -122,9 +124,18 @@ defmodule Kino.Qx.TranspileCellTest do
                  "save_qasm",
                  "qasm_paste",
                  "optimization_level",
+                 "shots",
                  "last_job_id",
                  "last_counts"
                ])
+    end
+
+    test "shots defaults to 4096 and is persisted" do
+      attrs = TranspileCell.to_attrs(ctx_for(%{shots: 4096}))
+      assert attrs["shots"] == 4096
+
+      attrs = TranspileCell.to_attrs(ctx_for(%{shots: 1024}))
+      assert attrs["shots"] == 1024
     end
   end
 

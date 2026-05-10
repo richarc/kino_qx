@@ -20,19 +20,22 @@ defmodule Kino.Qx.IbmClient do
   Every authed call is wrapped in `with_iam_refresh/2`, which catches
   401, runs a fresh IAM exchange once, and retries.
 
-  ## Sessions are required
+  ## Sessions are optional — we don't use them
 
-  Direct `POST /jobs` (without a session) was deprecated 2025-03-31.
-  Callers must `open_session/3` first and pass the returned id into
-  `submit_sampler/4`.
+  IBM's current spec (2026-05) treats sessions as optional and
+  supports direct `POST /jobs`. Empirically verified against a
+  production-proven reference (`qx_server`, last working 2026-02 and
+  no relevant IBM API changes since per the changelog). Dropping
+  sessions removes a request, an error path, and a leakage class.
 
   ## Iron Law #7
 
-  IBM job-state values arrive as binaries from the wire
-  (`"INITIALIZING"`, `"QUEUED"`, `"RUNNING"`, `"DONE"`, `"CANCELLED"`,
-  `"ERROR"`). They are matched against `@known_statuses` and returned
-  as binaries — never `String.to_atom/1`-ed. Same posture as
-  `Kino.Qx.Client`'s `@known_keys` allowlist.
+  IBM job-status values arrive as binaries from the wire (Pascal-Case
+  per the documented enum: `"Queued"`, `"Running"`, `"Completed"`,
+  `"Cancelled"`, `"Cancelled - Ran too long"`, `"Failed"`). They are
+  matched against `@known_statuses` and returned as binaries — never
+  `String.to_atom/1`-ed. Same posture as `Kino.Qx.Client`'s
+  `@known_keys` allowlist.
 
   ## Privacy invariant
 
@@ -43,8 +46,19 @@ defmodule Kino.Qx.IbmClient do
 
   @iam_url_default "https://iam.cloud.ibm.com/identity/token"
   @api_version "2026-03-15"
-  @known_statuses ~w(INITIALIZING QUEUED RUNNING DONE CANCELLED ERROR)
-  @default_max_ttl 3600
+  # IBM-documented JobStatus enum, Pascal-Case. Polled binaries are
+  # matched against this set; any drift surfaces as a loud error.
+  @known_statuses [
+    "Queued",
+    "Running",
+    "Completed",
+    "Cancelled",
+    "Cancelled - Ran too long",
+    "Failed"
+  ]
+  @terminal_success ["Completed"]
+  @terminal_failure ["Failed", "Cancelled", "Cancelled - Ran too long"]
+  @default_shots 4096
 
   @typedoc "Region — encoded into the Service-CRN by IBM."
   @type region :: :us_south | :eu_de
@@ -184,70 +198,29 @@ defmodule Kino.Qx.IbmClient do
   end
 
   ## --------------------------------------------------------------
-  ## Sessions
-  ## --------------------------------------------------------------
-
-  @doc """
-  Opens a runtime session on the chosen backend.
-
-  Sessions are mandatory: direct `/jobs` POST without a session has
-  been deprecated since 2025-03-31. `max_ttl` defaults to 3600s
-  (the IBM default); session auto-cancels pending jobs at expiry,
-  running jobs complete.
-  """
-  @spec open_session(config(), String.t(), pos_integer()) ::
-          {:ok, String.t()} | {:error, term()}
-  def open_session(config, backend, max_ttl \\ @default_max_ttl)
-      when is_binary(backend) and is_integer(max_ttl) and max_ttl > 0 do
-    body = %{"backend" => backend, "mode" => "dedicated", "max_ttl" => max_ttl}
-
-    with_iam_refresh(config, fn cfg ->
-      case authed_request(:post, cfg, "/sessions", body) do
-        {:ok, %{"id" => id}} when is_binary(id) -> {:ok, id}
-        {:ok, _} -> {:error, :unexpected_response}
-        error -> error
-      end
-    end)
-  end
-
-  @doc """
-  Closes a session — best-effort. Returns `:ok` even on 404 since
-  the cell calls this in cleanup paths where the session may already
-  have expired.
-  """
-  @spec close_session(config(), String.t()) :: :ok | {:error, term()}
-  def close_session(config, session_id) when is_binary(session_id) do
-    case with_iam_refresh(config, fn cfg ->
-           authed_request(:delete, cfg, "/sessions/#{session_id}", nil)
-         end) do
-      :ok -> :ok
-      {:ok, _body} -> :ok
-      {:error, :not_found} -> :ok
-      error -> error
-    end
-  end
-
-  ## --------------------------------------------------------------
   ## Jobs
   ## --------------------------------------------------------------
 
   @doc """
-  Submits a Sampler job. The PUB-format wrapping (`pubs: [[qasm, nil]]`)
-  is done here so callers never build the raw shape — forgetting the
-  outer list is a 400.
+  Submits a Sampler job. The PUB-format wrapping
+  (`pubs: [[qasm, nil, shots]]`) is done here so callers never build
+  the raw shape — forgetting the outer list is a 400. The 3-element
+  PUB carries qasm + null observable + shot count (matches the
+  production-proven `qx_server` wire format).
+
+  No session is opened; IBM's spec treats sessions as optional and
+  direct `POST /jobs` is fully supported.
   """
-  @spec submit_sampler(config(), String.t(), String.t(), String.t()) ::
+  @spec submit_sampler(config(), String.t(), String.t(), pos_integer()) ::
           {:ok, String.t()} | {:error, term()}
-  def submit_sampler(config, qasm, backend, session_id)
-      when is_binary(qasm) and is_binary(backend) and is_binary(session_id) do
+  def submit_sampler(config, qasm, backend, shots \\ @default_shots)
+      when is_binary(qasm) and is_binary(backend) and is_integer(shots) and shots > 0 do
     body = %{
       "program_id" => "sampler",
       "backend" => backend,
-      "session_id" => session_id,
       "params" => %{
-        "pubs" => [[qasm, nil]],
         "version" => 2,
-        "options" => %{"resilience_level" => 1}
+        "pubs" => [[qasm, nil, shots]]
       }
     }
 
@@ -261,44 +234,71 @@ defmodule Kino.Qx.IbmClient do
   end
 
   @doc """
-  Returns the current job status as a binary, plus optional
-  `queue_position` and `reason`.
+  Returns the current job status as a binary.
+
+  IBM's `GET /jobs/{id}` returns BOTH a top-level `status` and a
+  nested `state.status` (which is the schema-required path). We read
+  `state.status` and fall back to top-level — handles both old and
+  new shapes.
 
   Status is matched against `@known_statuses`; an unknown value
-  becomes `{:error, {:unknown_status, raw}}` so a future API
-  drift surfaces loudly rather than silently being misclassified.
+  becomes `{:error, {:unknown_status, raw}}` so a future API drift
+  surfaces loudly rather than silently being misclassified.
   """
   @spec poll_job(config(), String.t()) ::
-          {:ok,
-           %{
-             status: String.t(),
-             reason: String.t() | nil,
-             queue_position: integer() | nil
-           }}
+          {:ok, %{status: String.t(), reason: String.t() | nil}}
           | {:error, term()}
   def poll_job(config, job_id) when is_binary(job_id) do
     with_iam_refresh(config, fn cfg ->
       case authed_request(:get, cfg, "/jobs/#{job_id}", nil) do
-        {:ok, %{"state" => %{"status" => status} = state} = body} when is_binary(status) ->
-          if status in @known_statuses do
-            {:ok,
-             %{
-               status: status,
-               reason: state["reason"],
-               queue_position: body["queue_position"]
-             }}
-          else
-            {:error, {:unknown_status, status}}
-          end
-
-        {:ok, _} ->
-          {:error, :unexpected_response}
+        {:ok, body} when is_map(body) ->
+          parse_job_response(body)
 
         error ->
           error
       end
     end)
   end
+
+  defp parse_job_response(body) do
+    status = get_in(body, ["state", "status"]) || body["status"]
+    reason = get_in(body, ["state", "reason"]) || body["reason"]
+
+    cond do
+      not is_binary(status) ->
+        {:error, :unexpected_response}
+
+      status in @known_statuses ->
+        {:ok, %{status: status, reason: reason}}
+
+      true ->
+        {:error, {:unknown_status, status}}
+    end
+  end
+
+  @doc """
+  Cancels a running job. Returns `:ok` on 200/204 (including the
+  "already terminal" idempotent path) and on 404 (job already gone).
+
+  Uses `POST /jobs/{id}/cancel` per IBM's current spec.
+  """
+  @spec cancel_job(config(), String.t()) :: :ok | {:error, term()}
+  def cancel_job(config, job_id) when is_binary(job_id) do
+    case with_iam_refresh(config, fn cfg ->
+           authed_request(:post, cfg, "/jobs/#{job_id}/cancel", %{})
+         end) do
+      :ok -> :ok
+      {:ok, _body} -> :ok
+      {:error, :not_found} -> :ok
+      error -> error
+    end
+  end
+
+  @doc false
+  def terminal_success?(status), do: status in @terminal_success
+
+  @doc false
+  def terminal_failure?(status), do: status in @terminal_failure
 
   @doc """
   Fetches the result of a finished job (Sampler shape only).

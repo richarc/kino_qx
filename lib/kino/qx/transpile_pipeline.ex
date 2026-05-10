@@ -8,14 +8,16 @@ defmodule Kino.Qx.TranspilePipeline do
 
   ## Flow
 
-      1. on_status.({:ibm, :authenticating})       → IbmClient.iam_exchange/1
-      2. on_status.({:ibm, :fetching_backend})     → IbmClient.fetch_backend_properties/2
-      3. on_status.({:portal, :transpiling})       → Client.transpile/2
-      4. on_status.({:ibm, :opening_session})      → IbmClient.open_session/3
-      5. on_status.({:ibm, :submitting})           → IbmClient.submit_sampler/4
-      6. on_status.({:ibm, :polling, status, qp})  → IbmClient.poll_job/2 (loop)
-      7. on_status.({:ibm, :fetching_results})     → IbmClient.fetch_results/2
-      8. (best-effort)                             → IbmClient.close_session/2
+      1. on_status.({:ibm, :authenticating})    → IbmClient.iam_exchange/1
+      2. on_status.({:ibm, :fetching_backend})  → IbmClient.fetch_backend_properties/2
+      3. on_status.({:portal, :transpiling})    → Client.transpile/2
+      4. on_status.({:ibm, :submitting})        → IbmClient.submit_sampler/4
+      5. on_status.({:ibm, :job_started, jid})  → (cell tracks job_id for cancel)
+      6. on_status.({:ibm, :polling, status})   → IbmClient.poll_job/2 (loop)
+      7. on_status.({:ibm, :fetching_results})  → IbmClient.fetch_results/2
+
+  Sessions are not used; IBM's spec treats them as optional and
+  qx_server proves direct `POST /jobs` works in production.
 
   ## Error returns
 
@@ -24,10 +26,11 @@ defmodule Kino.Qx.TranspilePipeline do
 
     * `:ibm_auth` — IAM exchange or backend fetch failed
     * `:portal_transpile` — qxportal `/api/v1/transpile` failed
-    * `:ibm_submit` — open_session or submit_sampler failed
+    * `:ibm_submit` — submit_sampler failed
     * `:ibm_polling` — a poll request itself failed (network, etc.)
     * `:ibm_polling_timeout` — `:timeout_ms` exceeded
-    * `:ibm_job_failed` — IBM returned terminal status `ERROR` or `CANCELLED`
+    * `:ibm_job_failed` — IBM returned terminal status `"Failed"`,
+      `"Cancelled"`, or `"Cancelled - Ran too long"`
     * `:ibm_results` — results fetch failed
 
   ## Privacy invariant
@@ -43,7 +46,7 @@ defmodule Kino.Qx.TranspilePipeline do
   @poll_max_interval_ms 30_000
   # 24 hours — IBM queues can be very long. Cell can override.
   @default_timeout_ms 24 * 60 * 60 * 1000
-  @terminal_failure_statuses ~w(ERROR CANCELLED)
+  @default_shots 4096
 
   @type input :: %{
           required(:portal_config) => Client.config(),
@@ -51,6 +54,7 @@ defmodule Kino.Qx.TranspilePipeline do
           required(:qasm) => String.t(),
           required(:backend) => String.t(),
           required(:optimization_level) => 0..3,
+          optional(:shots) => pos_integer(),
           optional(:seed_transpiler) => integer() | nil,
           optional(:on_status) => (any() -> any()),
           optional(:timeout_ms) => pos_integer(),
@@ -73,6 +77,7 @@ defmodule Kino.Qx.TranspilePipeline do
     on_status = Map.get(opts, :on_status, fn _ -> :ok end)
     sleep_fn = Map.get(opts, :sleep, &Process.sleep/1)
     timeout_ms = Map.get(opts, :timeout_ms, @default_timeout_ms)
+    shots = Map.get(opts, :shots, @default_shots)
 
     on_status.({:ibm, :authenticating})
 
@@ -84,26 +89,19 @@ defmodule Kino.Qx.TranspilePipeline do
          payload = build_transpile_payload(opts, props),
          {:ok, transpile_result} <-
            stage(:portal_transpile, fn -> portal.transpile(opts.portal_config, payload) end),
-         _ = on_status.({:ibm, :opening_session}),
-         {:ok, session_id} <-
-           stage(:ibm_submit, fn -> ibm.open_session(ibm_cfg, opts.backend) end),
-         # Emit so the cell can call close_session/2 if the user cancels
-         # mid-poll. Without this the session leaks until max_ttl.
-         _ = on_status.({:ibm, :session_opened, session_id}),
          _ = on_status.({:ibm, :submitting}),
          {:ok, job_id} <-
            stage(:ibm_submit, fn ->
-             ibm.submit_sampler(ibm_cfg, transpile_result.qasm, opts.backend, session_id)
+             ibm.submit_sampler(ibm_cfg, transpile_result.qasm, opts.backend, shots)
            end),
+         # Emit so the cell can call cancel_job/2 if the user cancels
+         # mid-poll. Without this we have no way to stop the running job.
+         _ = on_status.({:ibm, :job_started, job_id}),
          {:ok, _final_info} <-
            poll_until_done(ibm, ibm_cfg, job_id, on_status, sleep_fn, timeout_ms),
          _ = on_status.({:ibm, :fetching_results}),
          {:ok, results} <-
            stage(:ibm_results, fn -> ibm.fetch_results(ibm_cfg, job_id) end) do
-      # Best-effort cleanup; errors swallowed (session may have
-      # auto-closed at TTL or never opened cleanly).
-      _ = ibm.close_session(ibm_cfg, session_id)
-
       {:ok,
        %{
          counts: results.counts,
@@ -153,14 +151,14 @@ defmodule Kino.Qx.TranspilePipeline do
     else
       case ibm.poll_job(cfg, job_id) do
         {:ok, %{status: status} = info} ->
-          on_status.({:ibm, :polling, status, info.queue_position})
+          on_status.({:ibm, :polling, status})
 
           cond do
-            status == "DONE" ->
+            IbmClient.terminal_success?(status) ->
               {:ok, info}
 
-            status in @terminal_failure_statuses ->
-              {:error, :ibm_job_failed, %{status: status, reason: info.reason}}
+            IbmClient.terminal_failure?(status) ->
+              {:error, :ibm_job_failed, %{status: status, reason: info[:reason]}}
 
             true ->
               sleep_fn.(interval)

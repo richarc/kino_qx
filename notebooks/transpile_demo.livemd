@@ -40,11 +40,16 @@ following circuit pasted into the QASM textarea:
 OPENQASM 3.0;
 include "stdgates.inc";
 qubit[2] q;
-bit[2] c;
 h q[0];
 cx q[0], q[1];
-c = measure q;
 ```
+
+> **Important:** paste only the **gate-level** circuit. Do NOT include
+> `bit[2] c;` or `measure q;` — qxportal's transpile endpoint accepts
+> gates only (this matches the documented API contract). IBM's
+> Sampler primitive adds measurement at submit time and returns
+> counts for every qubit. If you include measurement here you'll get
+> a `Portal rejected the QASM (422)` error.
 
 A correctly-running Bell pair gives counts concentrated on `00` and
 `11`, with `01` / `10` near zero (modulo readout error).

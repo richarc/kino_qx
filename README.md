@@ -94,6 +94,24 @@ circuit in the `.livemd`.
 
 `Cancel` kills the polling Task and best-effort closes the IBM session.
 
+### QASM format
+
+The transpile endpoint takes the **gate-level** circuit only — no
+`measure` statements, no classical bit declarations. IBM's Sampler
+primitive measures every qubit at submit time and returns the counts.
+
+```qasm
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[2] q;
+h q[0];
+cx q[0], q[1];
+```
+
+Adding `bit[2] c;` or `c = measure q;` makes qxportal return
+`Portal rejected the QASM (422)`. OpenQASM 2.0 input is also
+rejected — convert to 3.0 client-side first.
+
 ### What's NOT in v1
 
 - Estimator primitive (Sampler only — base64 tensor decoding deserves

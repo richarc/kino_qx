@@ -161,37 +161,12 @@ defmodule Kino.Qx.IbmClientTest do
     end
   end
 
-  describe "open_session/3" do
-    test "POSTs backend + max_ttl, returns id", %{api: api, config: config} do
-      Bypass.expect_once(api, "POST", "/sessions", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        assert {:ok, decoded} = Jason.decode(body)
-        assert decoded["backend"] == "ibm_brisbane"
-        assert decoded["max_ttl"] == 3600
-        assert decoded["mode"] == "dedicated"
-
-        json_resp(conn, 200, %{id: "session_abc123"})
-      end)
-
-      assert {:ok, "session_abc123"} =
-               IbmClient.open_session(authed_config(config), "ibm_brisbane")
-    end
-
-    test "honours custom max_ttl", %{api: api, config: config} do
-      Bypass.expect_once(api, "POST", "/sessions", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        assert {:ok, %{"max_ttl" => 60}} = Jason.decode(body)
-        json_resp(conn, 200, %{id: "session_x"})
-      end)
-
-      assert {:ok, "session_x"} =
-               IbmClient.open_session(authed_config(config), "ibm_brisbane", 60)
-    end
-  end
-
   describe "submit_sampler/4" do
-    test "wraps qasm into pubs: [[qasm, nil]]", %{api: api, config: config} do
-      qasm = "OPENQASM 3.0; qubit[2] q; h q[0]; cx q[0], q[1]; measure q;"
+    test "wraps qasm into pubs: [[qasm, nil, shots]] and POSTs without session", %{
+      api: api,
+      config: config
+    } do
+      qasm = "OPENQASM 3.0; qubit[2] q; h q[0]; cx q[0], q[1];"
 
       Bypass.expect_once(api, "POST", "/jobs", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -199,83 +174,127 @@ defmodule Kino.Qx.IbmClientTest do
 
         assert decoded["program_id"] == "sampler"
         assert decoded["backend"] == "ibm_brisbane"
-        assert decoded["session_id"] == "session_abc"
-        # PUB shape: list of pairs, even for one circuit. Forgetting
-        # the outer list 400s the request.
-        assert [[^qasm, nil]] = decoded["params"]["pubs"]
+        # No session — qx_server proved this works against real IBM,
+        # and the docs treat sessions as optional.
+        refute Map.has_key?(decoded, "session_id")
+        # 3-element PUB: [qasm, observable (nil for Sampler), shots]
+        assert [[^qasm, nil, 4096]] = decoded["params"]["pubs"]
         assert decoded["params"]["version"] == 2
 
         json_resp(conn, 200, %{id: "job_xyz789", backend: "ibm_brisbane"})
       end)
 
       assert {:ok, "job_xyz789"} =
+               IbmClient.submit_sampler(authed_config(config), qasm, "ibm_brisbane")
+    end
+
+    test "honours custom shots count", %{api: api, config: config} do
+      Bypass.expect_once(api, "POST", "/jobs", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert {:ok, %{"params" => %{"pubs" => [[_, nil, 1024]]}}} = Jason.decode(body)
+        json_resp(conn, 200, %{id: "job_custom_shots"})
+      end)
+
+      assert {:ok, "job_custom_shots"} =
                IbmClient.submit_sampler(
                  authed_config(config),
-                 qasm,
+                 "OPENQASM 3.0;",
                  "ibm_brisbane",
-                 "session_abc"
+                 1024
                )
     end
   end
 
   describe "poll_job/2" do
-    test "returns DONE status with reason + queue_position", %{api: api, config: config} do
+    test "Completed (nested state.status) returns binary status", %{api: api, config: config} do
       Bypass.expect_once(api, "GET", "/jobs/job_xyz", fn conn ->
         json_resp(conn, 200, %{
           id: "job_xyz",
-          state: %{status: "DONE", reason: nil},
-          queue_position: 0
+          state: %{status: "Completed", reason: ""},
+          status: "Completed"
         })
       end)
 
-      assert {:ok, %{status: "DONE", reason: nil, queue_position: 0}} =
+      assert {:ok, %{status: "Completed", reason: ""}} =
                IbmClient.poll_job(authed_config(config), "job_xyz")
     end
 
-    test "returns QUEUED with queue_position", %{api: api, config: config} do
-      Bypass.expect_once(api, "GET", "/jobs/job_q", fn conn ->
-        json_resp(conn, 200, %{
-          id: "job_q",
-          state: %{status: "QUEUED", reason: nil},
-          queue_position: 17
-        })
+    test "reads top-level status when no nested state present", %{api: api, config: config} do
+      # qx_server's observed shape — top-level status only.
+      Bypass.expect_once(api, "GET", "/jobs/job_top", fn conn ->
+        json_resp(conn, 200, %{id: "job_top", status: "Running"})
       end)
 
-      assert {:ok, %{status: "QUEUED", queue_position: 17}} =
-               IbmClient.poll_job(authed_config(config), "job_q")
+      assert {:ok, %{status: "Running"}} =
+               IbmClient.poll_job(authed_config(config), "job_top")
     end
 
-    test "returns ERROR with reason", %{api: api, config: config} do
+    test "Failed status includes reason", %{api: api, config: config} do
       Bypass.expect_once(api, "GET", "/jobs/job_e", fn conn ->
         json_resp(conn, 200, %{
-          id: "job_e",
-          state: %{status: "ERROR", reason: "circuit too large"},
-          queue_position: nil
+          state: %{status: "Failed", reason: "circuit too large"}
         })
       end)
 
-      assert {:ok, %{status: "ERROR", reason: "circuit too large"}} =
+      assert {:ok, %{status: "Failed", reason: "circuit too large"}} =
                IbmClient.poll_job(authed_config(config), "job_e")
     end
 
-    test "all known statuses round-trip without atom conversion", %{api: api, config: config} do
-      for status <- ~w(INITIALIZING QUEUED RUNNING DONE CANCELLED ERROR) do
-        Bypass.expect_once(api, "GET", "/jobs/poll_#{status}", fn conn ->
-          json_resp(conn, 200, %{state: %{status: status, reason: nil}, queue_position: 0})
+    test "all documented Pascal-Case statuses round-trip without atom conversion", %{
+      api: api,
+      config: config
+    } do
+      for status <- [
+            "Queued",
+            "Running",
+            "Completed",
+            "Cancelled",
+            "Cancelled - Ran too long",
+            "Failed"
+          ] do
+        path_safe = String.replace(status, " ", "_")
+
+        Bypass.expect_once(api, "GET", "/jobs/poll_#{path_safe}", fn conn ->
+          json_resp(conn, 200, %{state: %{status: status}})
         end)
 
         assert {:ok, %{status: ^status}} =
-                 IbmClient.poll_job(authed_config(config), "poll_#{status}")
+                 IbmClient.poll_job(authed_config(config), "poll_#{path_safe}")
       end
     end
 
     test "unknown status surfaces loudly (no String.to_atom)", %{api: api, config: config} do
       Bypass.expect_once(api, "GET", "/jobs/job_drift", fn conn ->
-        json_resp(conn, 200, %{state: %{status: "WAT_NEW_STATE", reason: nil}, queue_position: 0})
+        json_resp(conn, 200, %{state: %{status: "WatNewState"}})
       end)
 
-      assert {:error, {:unknown_status, "WAT_NEW_STATE"}} =
+      assert {:error, {:unknown_status, "WatNewState"}} =
                IbmClient.poll_job(authed_config(config), "job_drift")
+    end
+
+    test "response with no status at all → :unexpected_response", %{api: api, config: config} do
+      Bypass.expect_once(api, "GET", "/jobs/no_status", fn conn ->
+        json_resp(conn, 200, %{id: "x", state: %{}})
+      end)
+
+      assert {:error, :unexpected_response} =
+               IbmClient.poll_job(authed_config(config), "no_status")
+    end
+  end
+
+  describe "terminal_success?/1 + terminal_failure?/1" do
+    test "Completed is terminal success" do
+      assert IbmClient.terminal_success?("Completed")
+      refute IbmClient.terminal_success?("Running")
+      refute IbmClient.terminal_success?("Failed")
+    end
+
+    test "Failed/Cancelled variants are terminal failure" do
+      assert IbmClient.terminal_failure?("Failed")
+      assert IbmClient.terminal_failure?("Cancelled")
+      assert IbmClient.terminal_failure?("Cancelled - Ran too long")
+      refute IbmClient.terminal_failure?("Queued")
+      refute IbmClient.terminal_failure?("Completed")
     end
   end
 
@@ -308,21 +327,29 @@ defmodule Kino.Qx.IbmClientTest do
     end
   end
 
-  describe "close_session/2" do
+  describe "cancel_job/2" do
+    test "POST /jobs/:id/cancel → :ok on 200", %{api: api, config: config} do
+      Bypass.expect_once(api, "POST", "/jobs/job_x/cancel", fn conn ->
+        json_resp(conn, 200, %{id: "job_x", status: "Cancelled"})
+      end)
+
+      assert :ok = IbmClient.cancel_job(authed_config(config), "job_x")
+    end
+
     test "204 → :ok", %{api: api, config: config} do
-      Bypass.expect_once(api, "DELETE", "/sessions/sess_x", fn conn ->
+      Bypass.expect_once(api, "POST", "/jobs/job_204/cancel", fn conn ->
         Plug.Conn.resp(conn, 204, "")
       end)
 
-      assert :ok = IbmClient.close_session(authed_config(config), "sess_x")
+      assert :ok = IbmClient.cancel_job(authed_config(config), "job_204")
     end
 
-    test "404 → :ok (best-effort)", %{api: api, config: config} do
-      Bypass.expect_once(api, "DELETE", "/sessions/gone", fn conn ->
+    test "404 (already terminal / unknown) → :ok (best-effort)", %{api: api, config: config} do
+      Bypass.expect_once(api, "POST", "/jobs/gone/cancel", fn conn ->
         json_resp(conn, 404, %{error: "not_found"})
       end)
 
-      assert :ok = IbmClient.close_session(authed_config(config), "gone")
+      assert :ok = IbmClient.cancel_job(authed_config(config), "gone")
     end
   end
 

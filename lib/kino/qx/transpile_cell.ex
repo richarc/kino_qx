@@ -32,6 +32,7 @@ defmodule Kino.Qx.TranspileCell do
     * `qasm_paste`          — the textarea body (only saved when "save with notebook" is ON)
     * `save_qasm`           — boolean, default false; gates `qasm_paste` persistence
     * `optimization_level`  — 0..3, default 1
+    * `shots`               — 1..100_000, default 4096 (Sampler measurement count)
     * `last_job_id`         — for re-attach awareness (display only)
     * `last_counts`         — last successful counts so a reopened notebook shows them
 
@@ -87,6 +88,7 @@ defmodule Kino.Qx.TranspileCell do
         qasm_paste: attrs["qasm_paste"] || "",
         save_qasm: attrs["save_qasm"] || false,
         optimization_level: attrs["optimization_level"] || 1,
+        shots: attrs["shots"] || 4096,
         last_job_id: attrs["last_job_id"],
         last_counts: attrs["last_counts"],
         # Transient (NEVER in to_attrs/1)
@@ -96,7 +98,6 @@ defmodule Kino.Qx.TranspileCell do
         backends_list: [],
         connected: false,
         identity: nil,
-        current_session_id: nil,
         current_status: "idle",
         current_status_detail: nil,
         current_job_id: nil,
@@ -170,6 +171,13 @@ defmodule Kino.Qx.TranspileCell do
     end
   end
 
+  def handle_event("update_shots", %{"value" => value}, ctx) do
+    case parse_shots(value) do
+      {:ok, shots} -> {:noreply, assign(ctx, shots: shots)}
+      :error -> {:noreply, set_error(ctx, "Shots must be a positive integer (1..100000).")}
+    end
+  end
+
   ## --------------------------------------------------------------
   ## Connect — IAM exchange + portal /me + list_backends
   ## --------------------------------------------------------------
@@ -205,7 +213,8 @@ defmodule Kino.Qx.TranspileCell do
     with :ok <- require_connected(ctx),
          :ok <- require_non_empty(ctx.assigns.last_backend_name, "backend"),
          :ok <- require_non_empty(ctx.assigns.qasm_paste, "QASM source"),
-         :ok <- require_optimization_level(ctx.assigns.optimization_level) do
+         :ok <- require_optimization_level(ctx.assigns.optimization_level),
+         :ok <- require_shots(ctx.assigns.shots) do
       input = build_pipeline_input(ctx)
       parent = self()
 
@@ -232,7 +241,7 @@ defmodule Kino.Qx.TranspileCell do
   end
 
   ## --------------------------------------------------------------
-  ## Cancel — kill the polling Task and close the IBM session.
+  ## Cancel — kill the polling Task and cancel the IBM job.
   ## --------------------------------------------------------------
 
   def handle_event("cancel", _params, ctx) do
@@ -240,19 +249,19 @@ defmodule Kino.Qx.TranspileCell do
       Process.exit(ctx.assigns.polling_task_pid, :kill)
     end
 
-    # Best-effort close — fire from a fresh Task so we don't block the
-    # cell process on a 30s HTTP timeout. close_session/2 itself
-    # tolerates 404 (already-expired session). Safe to skip if we
-    # never observed `:session_opened`.
-    if session_id = ctx.assigns.current_session_id do
+    # Best-effort cancel — fire from a fresh Task so we don't block the
+    # cell process on a 30s HTTP timeout. cancel_job/2 tolerates 404
+    # (job already terminal). Safe to skip if we never observed
+    # `:job_started` (e.g., cancel during transpile or auth).
+    if job_id = ctx.assigns.current_job_id do
       ibm_cfg = ibm_config(ctx)
-      Task.start(fn -> Kino.Qx.IbmClient.close_session(ibm_cfg, session_id) end)
+      Task.start(fn -> Kino.Qx.IbmClient.cancel_job(ibm_cfg, job_id) end)
     end
 
     ctx =
       assign(ctx,
         polling_task_pid: nil,
-        current_session_id: nil,
+        current_job_id: nil,
         current_status: "cancelled",
         current_status_detail: nil
       )
@@ -297,7 +306,6 @@ defmodule Kino.Qx.TranspileCell do
     ctx =
       assign(ctx,
         polling_task_pid: nil,
-        current_session_id: nil,
         current_status: "done",
         current_status_detail: nil,
         current_job_id: result.job_id,
@@ -313,7 +321,7 @@ defmodule Kino.Qx.TranspileCell do
   def handle_info({:pipeline_done, {:error, stage, reason}}, ctx) do
     ctx =
       ctx
-      |> assign(polling_task_pid: nil, current_session_id: nil, current_status: "error")
+      |> assign(polling_task_pid: nil, current_status: "error")
       |> set_error(pipeline_error_message(stage, reason))
 
     {:noreply, ctx}
@@ -358,6 +366,7 @@ defmodule Kino.Qx.TranspileCell do
       # Only persist QASM if the user opted in.
       "qasm_paste" => if(ctx.assigns.save_qasm, do: ctx.assigns.qasm_paste, else: ""),
       "optimization_level" => ctx.assigns.optimization_level,
+      "shots" => ctx.assigns.shots,
       "last_job_id" => ctx.assigns.last_job_id,
       "last_counts" => ctx.assigns.last_counts
     }
@@ -445,6 +454,7 @@ defmodule Kino.Qx.TranspileCell do
       qasm: ctx.assigns.qasm_paste,
       backend: ctx.assigns.last_backend_name,
       optimization_level: ctx.assigns.optimization_level,
+      shots: ctx.assigns.shots,
       on_status: &send(parent, {:status, &1})
     }
   end
@@ -464,24 +474,20 @@ defmodule Kino.Qx.TranspileCell do
     }
   end
 
-  defp apply_pipeline_status(ctx, {:ibm, :session_opened, session_id})
-       when is_binary(session_id) do
-    # Pipeline tells us the IBM session id so cancel can close it.
-    # Without this the session leaks until max_ttl (3600s).
-    assign(ctx, current_session_id: session_id)
+  defp apply_pipeline_status(ctx, {:ibm, :job_started, job_id})
+       when is_binary(job_id) do
+    # Pipeline tells us the IBM job id so cancel can call cancel_job/2.
+    # Without this we have no way to stop the job once submitted.
+    ctx = assign(ctx, current_job_id: job_id)
+    broadcast_event(ctx, "update", client_payload(ctx))
+    ctx
   end
 
-  defp apply_pipeline_status(ctx, {:ibm, :polling, status, queue_position}) do
-    detail =
-      case {status, queue_position} do
-        {"QUEUED", n} when is_integer(n) -> "queued (position #{n})"
-        {s, _} -> String.downcase(s)
-      end
-
+  defp apply_pipeline_status(ctx, {:ibm, :polling, status}) do
     ctx =
       assign(ctx,
         current_status: "polling",
-        current_status_detail: detail
+        current_status_detail: String.downcase(status)
       )
 
     broadcast_event(ctx, "update", client_payload(ctx))
@@ -494,7 +500,6 @@ defmodule Kino.Qx.TranspileCell do
         {:ibm, :authenticating} -> "authenticating with IBM"
         {:ibm, :fetching_backend} -> "fetching backend properties"
         {:portal, :transpiling} -> "transpiling at qxportal"
-        {:ibm, :opening_session} -> "opening IBM session"
         {:ibm, :submitting} -> "submitting job"
         {:ibm, :fetching_results} -> "fetching results"
         other -> inspect(other)
@@ -531,6 +536,17 @@ defmodule Kino.Qx.TranspileCell do
 
   defp parse_optimization_level(_), do: :error
 
+  defp parse_shots(value) when is_integer(value) and value in 1..100_000, do: {:ok, value}
+
+  defp parse_shots(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, _} when n in 1..100_000 -> {:ok, n}
+      _ -> :error
+    end
+  end
+
+  defp parse_shots(_), do: :error
+
   defp require_non_empty(value, label) do
     if is_binary(value) and String.trim(value) != "" do
       :ok
@@ -541,6 +557,9 @@ defmodule Kino.Qx.TranspileCell do
 
   defp require_optimization_level(level) when is_integer(level) and level in 0..3, do: :ok
   defp require_optimization_level(_), do: {:error, "Optimization level must be 0..3"}
+
+  defp require_shots(shots) when is_integer(shots) and shots in 1..100_000, do: :ok
+  defp require_shots(_), do: {:error, "Shots must be a positive integer (1..100000)"}
 
   defp require_connected(%{assigns: %{connected: true}}), do: :ok
   defp require_connected(_), do: {:error, "Connect first to verify credentials and load backends"}
@@ -648,6 +667,7 @@ defmodule Kino.Qx.TranspileCell do
       qasm_paste: ctx.assigns.qasm_paste,
       save_qasm: ctx.assigns.save_qasm,
       optimization_level: ctx.assigns.optimization_level,
+      shots: ctx.assigns.shots,
       backends_list: Enum.map(ctx.assigns.backends_list, &%{name: &1.name, status: &1.status}),
       connected: ctx.assigns.connected,
       identity_email: ctx.assigns.identity && ctx.assigns.identity[:email],
@@ -715,6 +735,10 @@ defmodule Kino.Qx.TranspileCell do
                 <option value="3">3</option>
               </select>
             </div>
+            <div class="qx-row">
+              <label>Shots</label>
+              <input id="qx-shots" type="number" min="1" max="100000" step="1" />
+            </div>
             <div class="qx-row qx-col-row">
               <label>QASM</label>
               <textarea id="qx-qasm" rows="6" placeholder="OPENQASM 3.0;\\nqubit[2] q;\\nh q[0];\\ncx q[0], q[1];\\nmeasure q;"></textarea>
@@ -740,6 +764,7 @@ defmodule Kino.Qx.TranspileCell do
         $("#qx-portal-url").value = p.portal_base_url || "";
         $("#qx-ibm-region").value = p.ibm_region || "us-south";
         $("#qx-opt").value = String(p.optimization_level ?? 1);
+        $("#qx-shots").value = String(p.shots ?? 4096);
         $("#qx-qasm").value = p.qasm_paste || "";
         $("#qx-save").checked = !!p.save_qasm;
 
@@ -839,6 +864,9 @@ defmodule Kino.Qx.TranspileCell do
       });
       $("#qx-opt").addEventListener("change", e =>
         ctx.pushEvent("update_optimization_level", { value: e.target.value })
+      );
+      $("#qx-shots").addEventListener("change", e =>
+        ctx.pushEvent("update_shots", { value: e.target.value })
       );
       $("#qx-qasm").addEventListener("change", e =>
         ctx.pushEvent("update_qasm_paste", { value: e.target.value })

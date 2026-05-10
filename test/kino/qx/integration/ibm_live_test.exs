@@ -89,26 +89,26 @@ defmodule Kino.Qx.Integration.IbmLiveTest do
       end
     end
 
-    test "Bell pair: open_session → submit_sampler → poll → fetch_results → close",
+    test "Bell pair: submit_sampler → poll → fetch_results (no sessions)",
          %{config: config} do
       {:ok, refreshed} = IbmClient.iam_exchange(config)
       {:ok, [backend | _]} = IbmClient.list_backends(refreshed)
 
+      # Gate-level only — measurement is added by IBM's Sampler at
+      # submit time. This matches qxportal's transpile contract.
       qasm = """
       OPENQASM 3.0;
       include "stdgates.inc";
       qubit[2] q;
-      bit[2] c;
       h q[0];
       cx q[0], q[1];
-      c = measure q;
       """
 
-      assert {:ok, session_id} = IbmClient.open_session(refreshed, backend.name, 600)
-      assert is_binary(session_id)
+      # No session open — direct POST /jobs (qx_server-proven path).
+      shots = 100
 
       assert {:ok, job_id} =
-               IbmClient.submit_sampler(refreshed, qasm, backend.name, session_id)
+               IbmClient.submit_sampler(refreshed, qasm, backend.name, shots)
 
       assert is_binary(job_id)
 
@@ -117,14 +117,12 @@ defmodule Kino.Qx.Integration.IbmLiveTest do
       deadline = System.monotonic_time(:millisecond) + 5 * 60 * 1000
       final = poll_until_done(refreshed, job_id, deadline)
 
-      assert match?({:ok, %{status: "DONE"}}, final),
-             "expected DONE, got #{inspect(final)}"
+      assert match?({:ok, %{status: "Completed"}}, final),
+             "expected Completed, got #{inspect(final)}"
 
       assert {:ok, %{counts: counts}} = IbmClient.fetch_results(refreshed, job_id)
       assert is_map(counts)
       assert map_size(counts) > 0
-
-      assert :ok = IbmClient.close_session(refreshed, session_id)
     end
   end
 
@@ -133,7 +131,8 @@ defmodule Kino.Qx.Integration.IbmLiveTest do
       {:error, :timeout}
     else
       case IbmClient.poll_job(config, job_id) do
-        {:ok, %{status: status}} = ok when status in ["DONE", "ERROR", "CANCELLED"] ->
+        {:ok, %{status: status}} = ok
+        when status in ["Completed", "Failed", "Cancelled", "Cancelled - Ran too long"] ->
           ok
 
         {:ok, _} ->
