@@ -56,7 +56,7 @@ defmodule Kino.Qx.TranspilePipelineTest do
 
     Recorder.set(
       recorder,
-      :fetch_backend_properties,
+      :fetch_backend_configuration,
       {:ok, %{coupling_map: [[0, 1]], basis_gates: ["cx"], num_qubits: 2}}
     )
 
@@ -109,7 +109,7 @@ defmodule Kino.Qx.TranspilePipelineTest do
 
       assert call_keys == [
                :iam_exchange,
-               :fetch_backend_properties,
+               :fetch_backend_configuration,
                :transpile,
                :submit_sampler,
                :poll_job,
@@ -165,9 +165,9 @@ defmodule Kino.Qx.TranspilePipelineTest do
       assert {:error, :ibm_auth, :unauthorized} = TranspilePipeline.run(base_input(ctx))
     end
 
-    test "fetch_backend_properties failure → {:error, :ibm_auth, _}", ctx do
+    test "fetch_backend_configuration failure → {:error, :ibm_auth, _}", ctx do
       Recorder.set(ctx.recorder, :iam_exchange, {:ok, %{__recorder__: ctx.recorder}})
-      Recorder.set(ctx.recorder, :fetch_backend_properties, {:error, :not_found})
+      Recorder.set(ctx.recorder, :fetch_backend_configuration, {:error, :not_found})
 
       assert {:error, :ibm_auth, :not_found} = TranspilePipeline.run(base_input(ctx))
     end
@@ -177,7 +177,7 @@ defmodule Kino.Qx.TranspilePipelineTest do
 
       Recorder.set(
         ctx.recorder,
-        :fetch_backend_properties,
+        :fetch_backend_configuration,
         {:ok, %{coupling_map: [], basis_gates: [], num_qubits: 0}}
       )
 

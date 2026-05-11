@@ -171,8 +171,14 @@ defmodule Kino.Qx.IbmClient do
   Returns the `coupling_map`, `basis_gates`, and `num_qubits` for a
   backend. These are the fields qxportal's `/api/v1/transpile`
   payload requires.
+
+  IBM serves this static device shape from
+  `GET /v1/backends/{name}/configuration` (NOT `/properties`, which
+  returns time-varying per-gate / per-qubit calibration data).
+  IBM names the qubit count `n_qubits` on the wire; we expose it as
+  `:num_qubits` to match the rest of our API surface.
   """
-  @spec fetch_backend_properties(config(), String.t()) ::
+  @spec fetch_backend_configuration(config(), String.t()) ::
           {:ok,
            %{
              coupling_map: list(list(non_neg_integer())),
@@ -180,15 +186,15 @@ defmodule Kino.Qx.IbmClient do
              num_qubits: non_neg_integer()
            }}
           | {:error, term()}
-  def fetch_backend_properties(config, name) when is_binary(name) do
+  def fetch_backend_configuration(config, name) when is_binary(name) do
     with_iam_refresh(config, fn cfg ->
-      case authed_request(:get, cfg, "/backends/#{name}/properties", nil) do
+      case authed_request(:get, cfg, "/backends/#{name}/configuration", nil) do
         {:ok, %{} = body} ->
           {:ok,
            %{
              coupling_map: body["coupling_map"],
              basis_gates: body["basis_gates"],
-             num_qubits: body["num_qubits"]
+             num_qubits: body["n_qubits"] || body["num_qubits"]
            }}
 
         error ->

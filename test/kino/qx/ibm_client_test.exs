@@ -140,24 +140,42 @@ defmodule Kino.Qx.IbmClientTest do
     end
   end
 
-  describe "fetch_backend_properties/2" do
-    test "extracts coupling_map, basis_gates, num_qubits", %{api: api, config: config} do
-      Bypass.expect_once(api, "GET", "/backends/ibm_brisbane/properties", fn conn ->
+  describe "fetch_backend_configuration/2" do
+    test "extracts coupling_map, basis_gates, num_qubits from /configuration", %{
+      api: api,
+      config: config
+    } do
+      Bypass.expect_once(api, "GET", "/backends/ibm_brisbane/configuration", fn conn ->
         json_resp(conn, 200, %{
+          backend_name: "ibm_brisbane",
           coupling_map: [[0, 1], [1, 2]],
           basis_gates: ["id", "rz", "sx", "x", "cx"],
-          num_qubits: 127,
-          # Other fields should be ignored
-          last_update_date: "2026-05-10T00:00:00Z"
+          # IBM uses `n_qubits` on the wire; our API exposes `num_qubits`.
+          n_qubits: 127,
+          # Other fields should be ignored.
+          online_date: "2026-05-10T00:00:00Z"
         })
       end)
 
       assert {:ok, props} =
-               IbmClient.fetch_backend_properties(authed_config(config), "ibm_brisbane")
+               IbmClient.fetch_backend_configuration(authed_config(config), "ibm_brisbane")
 
       assert props.coupling_map == [[0, 1], [1, 2]]
       assert props.basis_gates == ["id", "rz", "sx", "x", "cx"]
       assert props.num_qubits == 127
+    end
+
+    test "tolerates legacy `num_qubits` field if a server returns it", %{api: api, config: config} do
+      Bypass.expect_once(api, "GET", "/backends/legacy/configuration", fn conn ->
+        json_resp(conn, 200, %{
+          coupling_map: [],
+          basis_gates: ["x"],
+          num_qubits: 5
+        })
+      end)
+
+      assert {:ok, %{num_qubits: 5}} =
+               IbmClient.fetch_backend_configuration(authed_config(config), "legacy")
     end
   end
 

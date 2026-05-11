@@ -58,8 +58,8 @@ defmodule Kino.Qx.StubClients do
     def list_backends(%{__recorder__: pid} = config),
       do: Recorder.call(pid, :list_backends, [config])
 
-    def fetch_backend_properties(%{__recorder__: pid} = config, name),
-      do: Recorder.call(pid, :fetch_backend_properties, [config, name])
+    def fetch_backend_configuration(%{__recorder__: pid} = config, name),
+      do: Recorder.call(pid, :fetch_backend_configuration, [config, name])
 
     def submit_sampler(%{__recorder__: pid} = config, qasm, backend, shots \\ 4096),
       do: Recorder.call(pid, :submit_sampler, [config, qasm, backend, shots])

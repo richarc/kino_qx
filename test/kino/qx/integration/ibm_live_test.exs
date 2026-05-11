@@ -67,62 +67,64 @@ defmodule Kino.Qx.Integration.IbmLiveTest do
     assert is_binary(first.name)
   end
 
-  test "fetch_backend_properties on first backend yields coupling_map + basis_gates",
+  test "fetch_backend_configuration on first backend yields coupling_map + basis_gates",
        %{config: config} do
     {:ok, refreshed} = IbmClient.iam_exchange(config)
     {:ok, [backend | _]} = IbmClient.list_backends(refreshed)
 
-    assert {:ok, props} = IbmClient.fetch_backend_properties(refreshed, backend.name)
+    assert {:ok, props} = IbmClient.fetch_backend_configuration(refreshed, backend.name)
     assert is_list(props.coupling_map)
     assert is_list(props.basis_gates)
     assert is_integer(props.num_qubits)
+    assert props.num_qubits > 0
   end
 
   describe "full submit (IBM_QUANTUM_SUBMIT=1)" do
     @describetag :ibm_live_submit
 
-    setup %{config: config} do
-      if System.get_env("IBM_QUANTUM_SUBMIT") != "1" do
-        {:skip, "IBM_QUANTUM_SUBMIT not set — skipping shot-charging submit"}
-      else
-        {:ok, config: config}
-      end
-    end
-
     test "Bell pair: submit_sampler → poll → fetch_results (no sessions)",
          %{config: config} do
-      {:ok, refreshed} = IbmClient.iam_exchange(config)
-      {:ok, [backend | _]} = IbmClient.list_backends(refreshed)
+      if System.get_env("IBM_QUANTUM_SUBMIT") != "1" do
+        IO.puts("\n   (skipping — set IBM_QUANTUM_SUBMIT=1 to enable real-IBM shot submit)\n")
 
-      # Gate-level only — measurement is added by IBM's Sampler at
-      # submit time. This matches qxportal's transpile contract.
-      qasm = """
-      OPENQASM 3.0;
-      include "stdgates.inc";
-      qubit[2] q;
-      h q[0];
-      cx q[0], q[1];
-      """
+        # No-op body when not enabled; ExUnit reports the test as
+        # passing rather than skipped (ExUnit's :skip tag only works
+        # at compile-time).
+        :ok
+      else
+        {:ok, refreshed} = IbmClient.iam_exchange(config)
+        {:ok, [backend | _]} = IbmClient.list_backends(refreshed)
 
-      # No session open — direct POST /jobs (qx_server-proven path).
-      shots = 100
+        # Gate-level only — measurement is added by IBM's Sampler at
+        # submit time. This matches qxportal's transpile contract.
+        qasm = """
+        OPENQASM 3.0;
+        include "stdgates.inc";
+        qubit[2] q;
+        h q[0];
+        cx q[0], q[1];
+        """
 
-      assert {:ok, job_id} =
-               IbmClient.submit_sampler(refreshed, qasm, backend.name, shots)
+        # No session open — direct POST /jobs (qx_server-proven path).
+        shots = 100
 
-      assert is_binary(job_id)
+        assert {:ok, job_id} =
+                 IbmClient.submit_sampler(refreshed, qasm, backend.name, shots)
 
-      # Poll until terminal — bounded loop. Real IBM queue waits can
-      # be long; we cap at 5 minutes for the live test.
-      deadline = System.monotonic_time(:millisecond) + 5 * 60 * 1000
-      final = poll_until_done(refreshed, job_id, deadline)
+        assert is_binary(job_id)
 
-      assert match?({:ok, %{status: "Completed"}}, final),
-             "expected Completed, got #{inspect(final)}"
+        # Poll until terminal — bounded loop. Real IBM queue waits can
+        # be long; we cap at 5 minutes for the live test.
+        deadline = System.monotonic_time(:millisecond) + 5 * 60 * 1000
+        final = poll_until_done(refreshed, job_id, deadline)
 
-      assert {:ok, %{counts: counts}} = IbmClient.fetch_results(refreshed, job_id)
-      assert is_map(counts)
-      assert map_size(counts) > 0
+        assert match?({:ok, %{status: "Completed"}}, final),
+               "expected Completed, got #{inspect(final)}"
+
+        assert {:ok, %{counts: counts}} = IbmClient.fetch_results(refreshed, job_id)
+        assert is_map(counts)
+        assert map_size(counts) > 0
+      end
     end
   end
 

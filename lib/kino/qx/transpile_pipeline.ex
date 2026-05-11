@@ -84,7 +84,7 @@ defmodule Kino.Qx.TranspilePipeline do
     with {:ok, ibm_cfg} <- stage(:ibm_auth, fn -> ibm.iam_exchange(opts.ibm_config) end),
          _ = on_status.({:ibm, :fetching_backend}),
          {:ok, props} <-
-           stage(:ibm_auth, fn -> ibm.fetch_backend_properties(ibm_cfg, opts.backend) end),
+           stage(:ibm_auth, fn -> ibm.fetch_backend_configuration(ibm_cfg, opts.backend) end),
          _ = on_status.({:portal, :transpiling}),
          payload = build_transpile_payload(opts, props),
          {:ok, transpile_result} <-
