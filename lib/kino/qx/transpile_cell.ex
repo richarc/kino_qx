@@ -588,6 +588,12 @@ defmodule Kino.Qx.TranspileCell do
   defp pipeline_error_message(:portal_transpile, :invalid_qasm),
     do: "Portal rejected the QASM (422). Fix syntax and resubmit."
 
+  defp pipeline_error_message(:portal_transpile, {:invalid_qasm, detail}) when is_binary(detail),
+    do: "Portal rejected the QASM (422): #{detail}"
+
+  defp pipeline_error_message(:portal_transpile, {:invalid_qasm, _}),
+    do: "Portal rejected the QASM (422). Fix syntax and resubmit."
+
   defp pipeline_error_message(:portal_transpile, :transpile_failed),
     do: "Portal transpile failed (502). The transpiler errored on this circuit/backend pair."
 
@@ -647,6 +653,11 @@ defmodule Kino.Qx.TranspileCell do
   defp redact_reason(:unauthorized), do: "unauthorized"
   defp redact_reason(:not_found), do: "not found"
   defp redact_reason(:invalid_qasm), do: "invalid QASM"
+
+  defp redact_reason({:invalid_qasm, detail}) when is_binary(detail),
+    do: "invalid QASM: #{detail}"
+
+  defp redact_reason({:invalid_qasm, _}), do: "invalid QASM"
   defp redact_reason(:transpile_failed), do: "portal transpile failed"
   defp redact_reason(:transpile_timeout), do: "portal transpile timed out"
   defp redact_reason(:transpile_unavailable), do: "portal transpile unavailable"

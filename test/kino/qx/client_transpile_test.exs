@@ -64,12 +64,22 @@ defmodule Kino.Qx.ClientTranspileTest do
       assert Client.transpile(config, sample_payload()) == {:error, :unauthorized}
     end
 
-    test "422 maps to :invalid_qasm", %{bypass: bypass, config: config} do
+    test "422 maps to {:invalid_qasm, detail}", %{bypass: bypass, config: config} do
       Bypass.expect_once(bypass, "POST", "/api/v1/transpile", fn conn ->
         json_resp(conn, 422, %{error: "invalid_qasm", detail: "Parse error at line 1"})
       end)
 
-      assert Client.transpile(config, sample_payload()) == {:error, :invalid_qasm}
+      assert Client.transpile(config, sample_payload()) ==
+               {:error, {:invalid_qasm, "Parse error at line 1"}}
+    end
+
+    test "422 falls back to error code when detail missing", %{bypass: bypass, config: config} do
+      Bypass.expect_once(bypass, "POST", "/api/v1/transpile", fn conn ->
+        json_resp(conn, 422, %{error: "invalid_qasm"})
+      end)
+
+      assert Client.transpile(config, sample_payload()) ==
+               {:error, {:invalid_qasm, "invalid_qasm"}}
     end
 
     test "429 with retry-after maps to {:rate_limited, secs}", %{bypass: bypass, config: config} do

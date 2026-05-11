@@ -174,8 +174,8 @@ defmodule Kino.Qx.Client do
   defp handle_response({:ok, %Req.Response{status: 404}}, _verb),
     do: {:error, :not_found}
 
-  defp handle_response({:ok, %Req.Response{status: 422}}, :post),
-    do: {:error, :invalid_qasm}
+  defp handle_response({:ok, %Req.Response{status: 422, body: body}}, :post),
+    do: {:error, {:invalid_qasm, error_detail(body)}}
 
   defp handle_response({:ok, %Req.Response{status: 429} = resp}, _verb),
     do: {:error, {:rate_limited, retry_after_seconds(resp)}}
@@ -223,6 +223,12 @@ defmodule Kino.Qx.Client do
   defp to_known_atom(key) when is_binary(key) do
     Enum.find(@known_keys, key, fn atom -> Atom.to_string(atom) == key end)
   end
+
+  # Extracts the portal's human-readable `detail` from an error body so
+  # the user sees "include not found" instead of just "invalid_qasm".
+  defp error_detail(%{"detail" => detail}) when is_binary(detail), do: detail
+  defp error_detail(%{"error" => err}) when is_binary(err), do: err
+  defp error_detail(_), do: nil
 
   defp retry_after_seconds(%Req.Response{} = resp) do
     case Req.Response.get_header(resp, "retry-after") do

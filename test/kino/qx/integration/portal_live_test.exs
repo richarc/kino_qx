@@ -55,10 +55,18 @@ defmodule Kino.Qx.Integration.PortalLiveTest do
       seed_transpiler: 42
     }
 
-    assert {:ok, result} = Client.transpile(config, payload)
-    assert is_binary(result.qasm)
-    assert result.qasm =~ "OPENQASM"
-    assert is_map(result.metadata)
-    assert is_integer(result.metadata.depth) or is_nil(result.metadata.depth)
+    case Client.transpile(config, payload) do
+      {:ok, result} ->
+        assert is_binary(result.qasm)
+        assert result.qasm =~ "OPENQASM"
+        assert is_map(result.metadata)
+        assert is_integer(result.metadata.depth) or is_nil(result.metadata.depth)
+
+      {:error, {:invalid_qasm, detail}} ->
+        flunk("Portal rejected the QASM with detail: #{detail}")
+
+      other ->
+        flunk("Unexpected response: #{inspect(other)}")
+    end
   end
 end
