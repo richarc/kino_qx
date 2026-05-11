@@ -95,14 +95,20 @@ defmodule Kino.Qx.Integration.IbmLiveTest do
         {:ok, refreshed} = IbmClient.iam_exchange(config)
         {:ok, [backend | _]} = IbmClient.list_backends(refreshed)
 
-        # Gate-level only — measurement is added by IBM's Sampler at
-        # submit time. This matches qxportal's transpile contract.
+        # Full Qx-style QASM with explicit per-qubit measurements.
+        # IBM Sampler V2 does NOT auto-measure — circuits without
+        # `c[i] = measure q[i];` produce empty / errored results.
         qasm = """
         OPENQASM 3.0;
         include "stdgates.inc";
+
         qubit[2] q;
+        bit[2] c;
+
         h q[0];
         cx q[0], q[1];
+        c[0] = measure q[0];
+        c[1] = measure q[1];
         """
 
         # No session open — direct POST /jobs (qx_server-proven path).

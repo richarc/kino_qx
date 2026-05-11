@@ -96,21 +96,46 @@ circuit in the `.livemd`.
 
 ### QASM format
 
-The transpile endpoint takes the **gate-level** circuit only — no
-`measure` statements, no classical bit declarations. IBM's Sampler
-primitive measures every qubit at submit time and returns the counts.
+Paste a **complete** OpenQASM 3.0 circuit, as produced by
+`Qx.to_qasm/1`: gates plus the per-qubit measurements you want IBM
+to sample.
+
+IBM's Sampler V2 primitive **requires** explicit measurement
+instructions — it does not auto-measure. The qxportal transpile
+step preserves measurements through to the transpiled output, so
+the IBM submit receives a measurement-complete circuit.
+
+Typical Bell-pair input:
 
 ```qasm
 OPENQASM 3.0;
 include "stdgates.inc";
+
 qubit[2] q;
+bit[2] c;
+
 h q[0];
 cx q[0], q[1];
+c[0] = measure q[0];
+c[1] = measure q[1];
 ```
 
-Adding `bit[2] c;` or `c = measure q;` makes qxportal return
-`Portal rejected the QASM (422)`. OpenQASM 2.0 input is also
-rejected — convert to 3.0 client-side first.
+In practice you build this from a Qx circuit:
+
+```elixir
+qasm =
+  Qx.circuit(2)
+  |> Qx.h(0)
+  |> Qx.cx(0, 1)
+  |> Qx.measure(0, 0)
+  |> Qx.measure(1, 1)
+  |> Qx.to_qasm()
+```
+
+`include "stdgates.inc";` is required for named gates (`h`, `cx`,
+etc.); leaving it out makes qiskit's parser reject `cx` as
+undefined. OpenQASM 2.0 input is also rejected — convert to 3.0
+client-side first.
 
 ### What's NOT in v1
 
@@ -143,7 +168,7 @@ rejected — convert to 3.0 client-side first.
 | Symptom                            | Likely cause |
 |------------------------------------|--------------|
 | `IBM auth failed (401)`            | Wrong API key, wrong CRN, or the CRN region doesn't match the dropdown |
-| `Portal rejected the QASM (422)`   | OpenQASM 2.0 input (only 3.0 is accepted), or syntax error |
+| `Portal rejected the QASM (422)`   | Likely OpenQASM 2.0 input (only 3.0 accepted), missing `include "stdgates.inc";`, or a syntax error. The error detail now surfaces the underlying qiskit parser message. |
 | `Portal transpile failed (502)`    | The transpiler errored on this circuit/backend pair (e.g. circuit too wide for the backend) |
 | `IBM job ended with ERROR`         | Backend rejected the transpiled circuit — try a different backend |
 | Cell stuck on "queued"             | IBM queue can be very long. The cell polls for up to 24h by default |

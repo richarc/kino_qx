@@ -39,17 +39,36 @@ following circuit pasted into the QASM textarea:
 ```qasm
 OPENQASM 3.0;
 include "stdgates.inc";
+
 qubit[2] q;
+bit[2] c;
+
 h q[0];
 cx q[0], q[1];
+c[0] = measure q[0];
+c[1] = measure q[1];
 ```
 
-> **Important:** paste only the **gate-level** circuit. Do NOT include
-> `bit[2] c;` or `measure q;` — qxportal's transpile endpoint accepts
-> gates only (this matches the documented API contract). IBM's
-> Sampler primitive adds measurement at submit time and returns
-> counts for every qubit. If you include measurement here you'll get
-> a `Portal rejected the QASM (422)` error.
+> **Important:** the circuit MUST include explicit measurements.
+> IBM's Sampler V2 primitive does not auto-measure — without
+> `c[i] = measure q[i];` lines you get either an error or empty
+> counts back. The qxportal transpile step preserves measurements
+> through to the transpiled output.
+>
+> The `include "stdgates.inc";` line is also required so qiskit's
+> qasm3 parser knows about `h`, `cx`, and friends.
+
+In practice you would build this from Qx:
+
+```elixir
+qasm =
+  Qx.circuit(2)
+  |> Qx.h(0)
+  |> Qx.cx(0, 1)
+  |> Qx.measure(0, 0)
+  |> Qx.measure(1, 1)
+  |> Qx.to_qasm()
+```
 
 A correctly-running Bell pair gives counts concentrated on `00` and
 `11`, with `01` / `10` near zero (modulo readout error).
@@ -81,7 +100,13 @@ If `Connect` fails:
 
 If `Submit` fails:
 
-* `Portal rejected the QASM (422)` — your circuit is OpenQASM 2.0;
-  port to 3.0 first
+* `Portal rejected the QASM (422): gate 'X' is not defined` — add
+  `include "stdgates.inc";` near the top of your QASM
+* `Portal rejected the QASM (422)` — likely OpenQASM 2.0 input;
+  port to 3.0 first. The error detail surfaces the underlying
+  qiskit parse error
 * `Portal transpile failed (502)` — the circuit is too wide / deep
   for this backend; try a smaller backend or `optimization_level: 0`
+* `IBM job ended with Failed: no counts` — input QASM was missing
+  measurements (`c[i] = measure q[i];` lines). Sampler V2 requires
+  explicit measurement
