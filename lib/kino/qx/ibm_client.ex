@@ -307,33 +307,106 @@ defmodule Kino.Qx.IbmClient do
   def terminal_failure?(status), do: status in @terminal_failure
 
   @doc """
-  Fetches the result of a finished job (Sampler shape only).
+  Fetches the result of a finished Sampler job and aggregates the
+  individual shot samples into a counts map.
 
-  Estimator results are tensor-encoded base64 — out of scope for
-  this version; signalled as `{:error, :unsupported_result}`.
+  IBM's Sampler V2 response shape (verified live 2026-05):
+
+      {
+        "results": [{
+          "data": {
+            "<classical_register_name>": {
+              "samples": ["0x0", "0x3", "0x3", ...],
+              "num_bits": 2
+            }
+          },
+          "metadata": {...}
+        }],
+        "metadata": {...}
+      }
+
+  IBM does NOT pre-aggregate counts — each shot is returned as a
+  hex bitstring under `data.<reg>.samples`. We aggregate ourselves:
+  hex → integer → fixed-width binary → frequency map.
+
+  Returns the IBM-side merged metadata for downstream display.
+
+  Errors:
+    * `:unexpected_response` — body doesn't have `results: [_ | _]`
+    * `:unsupported_result` — first result has no recognizable data
+      shape (e.g. Estimator tensor format)
   """
   @spec fetch_results(config(), String.t()) ::
           {:ok, %{counts: map(), metadata: map()}} | {:error, term()}
   def fetch_results(config, job_id) when is_binary(job_id) do
     with_iam_refresh(config, fn cfg ->
       case authed_request(:get, cfg, "/jobs/#{job_id}/results", nil) do
-        {:ok, %{"data" => [%{"counts" => counts} | _], "metadata" => metadata}} ->
-          {:ok, %{counts: counts, metadata: metadata}}
-
-        {:ok, %{"data" => [%{"counts" => counts} | _]}} ->
-          {:ok, %{counts: counts, metadata: %{}}}
-
-        {:ok, %{"data" => _}} ->
-          # Data present but no `counts` key — Estimator/tensor shape.
-          {:error, :unsupported_result}
-
-        {:ok, _} ->
-          {:error, :unexpected_response}
-
-        error ->
-          error
+        {:ok, body} when is_map(body) -> parse_sampler_results(body)
+        {:error, _} = error -> error
+        _ -> {:error, :unexpected_response}
       end
     end)
+  end
+
+  defp parse_sampler_results(%{"results" => [first | _]} = body) when is_map(first) do
+    data = first["data"] || %{}
+    metadata = merge_result_metadata(body, first)
+
+    # The result data is keyed by classical register name(s) used in
+    # the circuit (typically `"c"` from `bit[2] c;` in the QASM). v1
+    # of this client supports one register's samples; multi-register
+    # results are deferred (would need a UI for picking which to
+    # render).
+    case find_register_samples(data) do
+      {:ok, samples, num_bits} ->
+        {:ok, %{counts: samples_to_counts(samples, num_bits), metadata: metadata}}
+
+      :error ->
+        {:error, :unsupported_result}
+    end
+  end
+
+  defp parse_sampler_results(_), do: {:error, :unexpected_response}
+
+  defp find_register_samples(data) when is_map(data) and map_size(data) > 0 do
+    Enum.find_value(data, :error, fn
+      {_name, %{"samples" => samples, "num_bits" => num_bits}}
+      when is_list(samples) and is_integer(num_bits) ->
+        {:ok, samples, num_bits}
+
+      _ ->
+        false
+    end)
+  end
+
+  defp find_register_samples(_), do: :error
+
+  # Convert a list of `"0x3"`-style hex samples into a frequency map
+  # keyed by fixed-width binary strings (`"11"` for 2 bits, etc.) to
+  # match qiskit's standard counts representation.
+  defp samples_to_counts(samples, num_bits) do
+    Enum.frequencies_by(samples, &hex_sample_to_bitstring(&1, num_bits))
+  end
+
+  defp hex_sample_to_bitstring("0x" <> hex, num_bits) when is_integer(num_bits) do
+    case Integer.parse(hex, 16) do
+      {n, ""} when n >= 0 ->
+        n |> Integer.to_string(2) |> String.pad_leading(num_bits, "0")
+
+      _ ->
+        # Pass through unparseable values rather than crashing; they
+        # surface as their own count bucket and signal a wire-format
+        # regression.
+        "0x" <> hex
+    end
+  end
+
+  defp hex_sample_to_bitstring(other, _num_bits), do: inspect(other)
+
+  defp merge_result_metadata(body, first_result) do
+    job_meta = Map.get(body, "metadata", %{}) || %{}
+    pub_meta = Map.get(first_result, "metadata", %{}) || %{}
+    Map.merge(job_meta, pub_meta)
   end
 
   ## --------------------------------------------------------------
@@ -409,8 +482,8 @@ defmodule Kino.Qx.IbmClient do
     handle_response(result)
   end
 
-  defp handle_response({:ok, %Req.Response{status: 200, body: body}}), do: {:ok, body}
-  defp handle_response({:ok, %Req.Response{status: 201, body: body}}), do: {:ok, body}
+  defp handle_response({:ok, %Req.Response{status: 200, body: body}}), do: {:ok, decode(body)}
+  defp handle_response({:ok, %Req.Response{status: 201, body: body}}), do: {:ok, decode(body)}
   defp handle_response({:ok, %Req.Response{status: 204}}), do: :ok
   defp handle_response({:ok, %Req.Response{status: 401}}), do: {:error, :unauthorized}
   defp handle_response({:ok, %Req.Response{status: 404}}), do: {:error, :not_found}
@@ -425,6 +498,20 @@ defmodule Kino.Qx.IbmClient do
 
   defp handle_response({:error, exception}),
     do: {:error, {:network, Exception.message(exception)}}
+
+  # Req's auto-decode keys off content-type. IBM's `/jobs/{id}/results`
+  # is returned without `content-type: application/json` (verified
+  # 2026-05 against the live API), so we fall back to Jason for any
+  # binary body that's actually JSON. If decode fails we pass the
+  # binary through unchanged.
+  defp decode(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> decoded
+      {:error, _} -> body
+    end
+  end
+
+  defp decode(body), do: body
 
   defp retry_after_seconds(%Req.Response{} = resp) do
     case Req.Response.get_header(resp, "retry-after") do

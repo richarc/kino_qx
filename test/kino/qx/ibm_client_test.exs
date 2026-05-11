@@ -317,31 +317,103 @@ defmodule Kino.Qx.IbmClientTest do
   end
 
   describe "fetch_results/2" do
-    test "Sampler shape returns counts + metadata", %{api: api, config: config} do
+    test "Sampler V2 shape aggregates samples to counts", %{api: api, config: config} do
+      # Real IBM Sampler V2 shape (verified live 2026-05).
+      # Counts are NOT pre-aggregated — IBM returns per-shot hex
+      # samples under data.<register_name>.samples. Our client
+      # aggregates and converts hex → binary bitstrings.
       Bypass.expect_once(api, "GET", "/jobs/job_done/results", fn conn ->
         json_resp(conn, 200, %{
-          data: [%{counts: %{"00" => 512, "11" => 512}}],
-          metadata: %{execution_time_ms: 1234, queue_wait_time_ms: 456}
+          results: [
+            %{
+              data: %{
+                # "c" is the classical register name declared in QASM
+                # via `bit[2] c;`. With 2 bits: 0x0=00, 0x1=01, 0x2=10, 0x3=11.
+                c: %{
+                  samples: ["0x0", "0x3", "0x3", "0x0", "0x3", "0x1", "0x0", "0x3"],
+                  num_bits: 2
+                }
+              },
+              metadata: %{circuit_metadata: %{}}
+            }
+          ],
+          metadata: %{execution: %{execution_spans: []}, version: 2}
         })
       end)
 
       assert {:ok, %{counts: counts, metadata: meta}} =
                IbmClient.fetch_results(authed_config(config), "job_done")
 
-      assert counts == %{"00" => 512, "11" => 512}
-      assert meta["execution_time_ms"] == 1234
+      assert counts == %{"00" => 3, "11" => 4, "01" => 1}
+      # Merged metadata: job-level + pub-level. Sampler version pinned.
+      assert meta["version"] == 2
     end
 
-    test "Estimator shape (no counts) → :unsupported_result", %{api: api, config: config} do
+    test "wide registers (num_bits > 4) zero-pad correctly", %{api: api, config: config} do
+      Bypass.expect_once(api, "GET", "/jobs/job_wide/results", fn conn ->
+        json_resp(conn, 200, %{
+          results: [
+            %{
+              data: %{
+                c: %{
+                  # 5 bits: 0x0=00000, 0x1=00001, 0x10=10000, 0x1f=11111
+                  samples: ["0x0", "0x1", "0x10", "0x1f", "0x0"],
+                  num_bits: 5
+                }
+              }
+            }
+          ]
+        })
+      end)
+
+      assert {:ok, %{counts: counts}} =
+               IbmClient.fetch_results(authed_config(config), "job_wide")
+
+      assert counts == %{"00000" => 2, "00001" => 1, "10000" => 1, "11111" => 1}
+    end
+
+    test "tolerates a JSON body returned as a plain binary (no content-type)",
+         %{api: api, config: config} do
+      # IBM's /jobs/{id}/results endpoint returns JSON without
+      # `content-type: application/json`, so Req's auto-decode skips
+      # it. We Jason.decode the binary in handle_response/1 as a
+      # universal fallback; this test pins that fallback.
+      json_body =
+        Jason.encode!(%{
+          results: [
+            %{data: %{c: %{samples: ["0x0", "0x3"], num_bits: 2}}}
+          ]
+        })
+
+      Bypass.expect_once(api, "GET", "/jobs/job_text/results", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/plain")
+        |> Plug.Conn.resp(200, json_body)
+      end)
+
+      assert {:ok, %{counts: %{"00" => 1, "11" => 1}}} =
+               IbmClient.fetch_results(authed_config(config), "job_text")
+    end
+
+    test "no recognizable register data → :unsupported_result", %{api: api, config: config} do
+      # Estimator-style (no `samples` field), or an empty data map.
       Bypass.expect_once(api, "GET", "/jobs/job_estim/results", fn conn ->
         json_resp(conn, 200, %{
-          data: [%{values: "base64=="}],
-          metadata: %{execution_time_ms: 100}
+          results: [%{data: %{c: %{values: "base64=="}}}]
         })
       end)
 
       assert {:error, :unsupported_result} =
                IbmClient.fetch_results(authed_config(config), "job_estim")
+    end
+
+    test "body missing `results` key → :unexpected_response", %{api: api, config: config} do
+      Bypass.expect_once(api, "GET", "/jobs/weird/results", fn conn ->
+        json_resp(conn, 200, %{some_other_shape: true})
+      end)
+
+      assert {:error, :unexpected_response} =
+               IbmClient.fetch_results(authed_config(config), "weird")
     end
   end
 

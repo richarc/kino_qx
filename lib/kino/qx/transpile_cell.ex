@@ -54,7 +54,16 @@ defmodule Kino.Qx.TranspileCell do
   """
   use Kino.JS
   use Kino.JS.Live
-  use Kino.SmartCell, name: "Qx Transpile + Submit"
+  # `reevaluate_on_change: true` — when the pipeline completes and stores
+  # `last_counts` + `last_job_id`, `to_attrs/1` returns a new value;
+  # Livebook then re-runs `to_source/1` and re-evaluates the cell, which
+  # renders the DataTable inline. Without this, the user would have to
+  # click ▶ on the cell after every submit to see the result.
+  #
+  # Safe because `to_source/1` only varies with `last_counts` / `last_job_id`
+  # — neither of those change during the polling loop, so we don't
+  # re-evaluate repeatedly while a job is in flight.
+  use Kino.SmartCell, name: "Qx Transpile + Submit", reevaluate_on_change: true
 
   alias Kino.Qx.TranspilePipeline
 
