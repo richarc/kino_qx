@@ -6,6 +6,18 @@
   Switch to `{:qx, "~> 0.7"}` at Phase 9.2 (after qx 0.7.0 is on Hex).
   Recorded per plan §Phase 0.3.
 
+- **2026-05-14 (Phase 3 mid-flight)** — Credentials cell **does NOT collect
+  tokens in its UI**. The plan's literal sketch ("emits qx struct with
+  transient tokens inline") is a privacy leak: Livebook persists the
+  smart-cell-generated source into the `.livemd` file, so any token in
+  `to_source/1` output would leak. Adopting the **kino_db pattern**
+  instead — cell UI collects only persistable fields (portal URL,
+  region, backend, opt level, shots); tokens come from Livebook
+  secrets (`LB_PORTAL_TOKEN`, `LB_IBM_API_KEY`, `LB_IBM_CRN`). Connect
+  reads them via `System.fetch_env!`; `to_source/1` emits code that
+  also calls `System.fetch_env!`. Tokens never live in cell state, never
+  enter the .livemd. Plan §Phase 3.6 amended below.
+
 ## Dead Ends (DO NOT RETRY)
 
 (none yet)

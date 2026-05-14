@@ -1,0 +1,121 @@
+# kino_qx — running a circuit on real IBM hardware
+
+```elixir
+Mix.install([
+  {:kino_qx, "~> 0.2"},
+  {:qx, "~> 0.7"}
+])
+```
+
+## What this notebook does
+
+Builds a `%Qx.QuantumCircuit{}` in pure Elixir, then pipes it through
+`Kino.Qx.run!/2` to run it on real IBM Quantum hardware via the
+[Qx Portal](https://qxportal.dev) for transpilation. The returned
+`%Qx.SimulationResult{}` pipes straight into `Qx.Draw.plot_counts/2`.
+
+## Set up Livebook secrets (one-time)
+
+The smart cell below needs **three Livebook secrets**:
+
+| Name | Where to find it |
+|------|------------------|
+| `LB_PORTAL_TOKEN` | qxportal → API keys → create a `qx_live_…` key |
+| `LB_IBM_API_KEY`  | IBM Cloud → Manage → Access (IAM) → API keys |
+| `LB_IBM_CRN`      | IBM Cloud → Resource list → your Quantum service → CRN |
+
+Add each one via the lock icon in Livebook's left sidebar before
+clicking **Connect** in the cell below. The cell itself never asks
+for tokens — they live only in your Livebook secret store, never in
+the `.livemd` file.
+
+## Step 1 — Credentials & backend (Smart Cell)
+
+Click **+ Smart** and pick **Qx Credentials**. Fill in:
+
+* Portal URL — leave as `https://test.qxquantum.com` unless you know
+  otherwise
+* Region — `us-south` or `eu-de` (must match your CRN region)
+* Click **Connect** — the cell reads the three secrets above, validates
+  with the portal, and populates the backend dropdown
+* Pick a backend, an optimization level, and shots
+
+The cell emits a `qx` binding for downstream cells to use.
+
+<!-- livebook:{"attrs":"e30","kind":"Elixir.Kino.Qx.CredentialsCell","livebook_object":"smart_cell"} -->
+
+```elixir
+# (the smart cell will replace this with the generated qx = %Qx.Hardware.Config{...})
+```
+
+## Step 2 — Build a Bell pair and run it
+
+```elixir
+circuit =
+  Qx.create_circuit(2, 2)
+  |> Qx.h(0)
+  |> Qx.cx(0, 1)
+  |> Qx.measure(0, 0)
+  |> Qx.measure(1, 1)
+
+circuit
+|> Kino.Qx.run!(qx)
+|> Qx.Draw.plot_counts(title: "Bell state on real hardware")
+```
+
+A live `Kino.Frame` status panel renders above the result while the
+job moves through transpile → submit → queued → running → done.
+
+## Expected result
+
+For a healthy backend with 4096 shots, the counts should concentrate
+on `"00"` and `"11"`:
+
+```
+%{"00" => ~2000, "11" => ~2000, "01" => 0..100, "10" => 0..100}
+```
+
+Readout error on real hardware widens the distribution, but `00 + 11`
+should still account for >95% of shots.
+
+## Outside Livebook
+
+The same machinery works from any Elixir context — `Kino.Qx.run!/2`
+is a thin UX wrapper over `Qx.Hardware.run!/3`. A standalone script
+or a Phoenix app can do:
+
+```elixir
+config = %Qx.Hardware.Config{
+  portal_url: "https://test.qxquantum.com",
+  portal_token: System.fetch_env!("PORTAL_TOKEN"),
+  ibm_api_key: System.fetch_env!("IBM_API_KEY"),
+  ibm_crn: System.fetch_env!("IBM_CRN"),
+  ibm_region: "us-south",
+  backend: "ibm_brisbane"
+}
+
+{:ok, result} = Qx.Hardware.run(circuit, config)
+```
+
+— no Kino runtime needed.
+
+## Troubleshooting
+
+**Connect fails with "Missing Livebook secret LB_PORTAL_TOKEN"**
+You haven't added that secret yet, or you misspelled the name (must be
+exactly `LB_PORTAL_TOKEN`).
+
+**Connect fails with `Auth rejected (401)`**
+The secret values are wrong, or the IBM region doesn't match the CRN.
+
+**Run fails with `(Qx.Hardware.NoMeasurementsError)`**
+Your circuit has no `Qx.measure/3` calls. IBM's Sampler V2 requires
+explicit measurements.
+
+**Run fails with `Portal rejected the QASM (422)`**
+The portal's transpiler couldn't parse the circuit. Often this means
+trying to use OpenQASM 2.0 — the portal accepts 3.0 only.
+
+**Run fails with `Portal transpile failed (502)`**
+The circuit is too wide or deep for this backend. Try a smaller
+backend or `optimization_level: 0`.

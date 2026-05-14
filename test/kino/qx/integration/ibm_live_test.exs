@@ -1,155 +1,100 @@
 defmodule Kino.Qx.Integration.IbmLiveTest do
   @moduledoc """
-  Hits **real** IBM Quantum Cloud and verifies the IAM exchange,
-  backend listing, and (optionally) a tiny Bell pair submit on the
+  Hits **real** IBM Quantum Cloud + qxportal via `Kino.Qx.run!/2`,
+  end-to-end. Verifies the new pipeline (credentials cell → run!
+  wrapper → `Qx.Hardware.run/3`) against a tiny Bell pair on the
   cheapest available backend.
 
   Excluded from the default `mix test` run via the `:ibm_live` tag.
   Run locally before each Hex publish:
 
+      QXPORTAL_API_KEY=qx_live_... \\
       IBM_QUANTUM_API_KEY=... \\
       IBM_QUANTUM_CRN=crn:v1:bluemix:public:quantum:us-south:a/...:... \\
       mix test --include ibm_live
 
   Submission requires `IBM_QUANTUM_SUBMIT=1` to be set as well — IBM
   charges per shot on most backends, so we never auto-submit. Without
-  it, only the read-only IAM + list_backends path is exercised.
+  it, only the auth + list_backends path is exercised via
+  `Qx.Hardware.connect/2`.
 
-  A failure here usually means IBM has migrated the API again
-  (history: 2023-24 provider→runtime, 2025-03 jobs→sessions). Update
-  `lib/kino/qx/ibm_client.ex` accordingly.
+  A failure here usually means either:
+    * IBM has migrated the API again (update `Qx.Hardware.Ibm` upstream)
+    * qxportal's `/transpile` contract changed (update `Qx.Hardware.Portal`)
   """
-  use ExUnit.Case, async: true
-
-  alias Kino.Qx.IbmClient
+  use ExUnit.Case, async: false
 
   @moduletag :ibm_live
 
   setup do
-    api_key = System.get_env("IBM_QUANTUM_API_KEY")
-    crn = System.get_env("IBM_QUANTUM_CRN")
-    region_str = System.get_env("IBM_QUANTUM_REGION", "us-south")
-
-    region =
-      case region_str do
-        "us-south" -> :us_south
-        "eu-de" -> :eu_de
-        _ -> :us_south
-      end
+    portal_token = System.get_env("QXPORTAL_API_KEY")
+    portal_url = System.get_env("QXPORTAL_BASE_URL", "https://test.qxquantum.com")
+    ibm_api_key = System.get_env("IBM_QUANTUM_API_KEY")
+    ibm_crn = System.get_env("IBM_QUANTUM_CRN")
+    ibm_region = System.get_env("IBM_QUANTUM_REGION", "us-south")
 
     cond do
-      is_nil(api_key) or api_key == "" ->
+      blank?(portal_token) ->
+        {:skip, "QXPORTAL_API_KEY not set"}
+
+      blank?(ibm_api_key) ->
         {:skip, "IBM_QUANTUM_API_KEY not set"}
 
-      is_nil(crn) or crn == "" ->
+      blank?(ibm_crn) ->
         {:skip, "IBM_QUANTUM_CRN not set"}
 
       true ->
-        {:ok, config: %{api_key: api_key, crn: crn, region: region}}
+        {:ok,
+         base_config: base_config(portal_url, portal_token, ibm_api_key, ibm_crn, ibm_region)}
     end
   end
 
-  test "IAM exchange returns a usable access_token", %{config: config} do
-    assert {:ok, refreshed} = IbmClient.iam_exchange(config)
-    assert is_binary(refreshed.access_token)
-    assert byte_size(refreshed.access_token) > 50
-    assert %DateTime{} = refreshed.token_expires_at
-    assert DateTime.compare(refreshed.token_expires_at, DateTime.utc_now()) == :gt
+  defp blank?(nil), do: true
+  defp blank?(""), do: true
+  defp blank?(_), do: false
+
+  defp base_config(portal_url, portal_token, ibm_api_key, ibm_crn, ibm_region) do
+    %Qx.Hardware.Config{
+      portal_url: portal_url,
+      portal_token: portal_token,
+      ibm_api_key: ibm_api_key,
+      ibm_crn: ibm_crn,
+      ibm_region: ibm_region,
+      backend: "",
+      optimization_level: 1,
+      shots: 1024
+    }
   end
 
-  test "list_backends returns at least one backend", %{config: config} do
-    assert {:ok, refreshed} = IbmClient.iam_exchange(config)
-    assert {:ok, backends} = IbmClient.list_backends(refreshed)
-    assert is_list(backends)
-    assert backends != []
-
-    first = List.first(backends)
-    assert is_binary(first.name)
+  test "Qx.Hardware.connect/2 validates auth and lists backends", %{base_config: cfg} do
+    assert {:ok, %Qx.Hardware.Config{} = connected} = Qx.Hardware.connect(cfg)
+    assert is_binary(connected.identity)
+    assert is_list(connected.backends_list)
+    refute connected.backends_list == []
   end
 
-  test "fetch_backend_configuration on first backend yields coupling_map + basis_gates",
-       %{config: config} do
-    {:ok, refreshed} = IbmClient.iam_exchange(config)
-    {:ok, [backend | _]} = IbmClient.list_backends(refreshed)
-
-    assert {:ok, props} = IbmClient.fetch_backend_configuration(refreshed, backend.name)
-    assert is_list(props.coupling_map)
-    assert is_list(props.basis_gates)
-    assert is_integer(props.num_qubits)
-    assert props.num_qubits > 0
-  end
-
-  describe "full submit (IBM_QUANTUM_SUBMIT=1)" do
-    @describetag :ibm_live_submit
-
-    test "Bell pair: submit_sampler → poll → fetch_results (no sessions)",
-         %{config: config} do
-      if System.get_env("IBM_QUANTUM_SUBMIT") != "1" do
-        IO.puts("\n   (skipping — set IBM_QUANTUM_SUBMIT=1 to enable real-IBM shot submit)\n")
-
-        # No-op body when not enabled; ExUnit reports the test as
-        # passing rather than skipped (ExUnit's :skip tag only works
-        # at compile-time).
-        :ok
-      else
-        {:ok, refreshed} = IbmClient.iam_exchange(config)
-        {:ok, [backend | _]} = IbmClient.list_backends(refreshed)
-
-        # Full Qx-style QASM with explicit per-qubit measurements.
-        # IBM Sampler V2 does NOT auto-measure — circuits without
-        # `c[i] = measure q[i];` produce empty / errored results.
-        qasm = """
-        OPENQASM 3.0;
-        include "stdgates.inc";
-
-        qubit[2] q;
-        bit[2] c;
-
-        h q[0];
-        cx q[0], q[1];
-        c[0] = measure q[0];
-        c[1] = measure q[1];
-        """
-
-        # No session open — direct POST /jobs (qx_server-proven path).
-        shots = 100
-
-        assert {:ok, job_id} =
-                 IbmClient.submit_sampler(refreshed, qasm, backend.name, shots)
-
-        assert is_binary(job_id)
-
-        # Poll until terminal — bounded loop. Real IBM queue waits can
-        # be long; we cap at 5 minutes for the live test.
-        deadline = System.monotonic_time(:millisecond) + 5 * 60 * 1000
-        final = poll_until_done(refreshed, job_id, deadline)
-
-        assert match?({:ok, %{status: "Completed"}}, final),
-               "expected Completed, got #{inspect(final)}"
-
-        assert {:ok, %{counts: counts}} = IbmClient.fetch_results(refreshed, job_id)
-        assert is_map(counts)
-        assert map_size(counts) > 0
-      end
-    end
-  end
-
-  defp poll_until_done(config, job_id, deadline) do
-    if System.monotonic_time(:millisecond) > deadline do
-      {:error, :timeout}
+  test "Kino.Qx.run!/2 end-to-end Bell pair (requires IBM_QUANTUM_SUBMIT=1)", %{base_config: cfg} do
+    if System.get_env("IBM_QUANTUM_SUBMIT") != "1" do
+      :skip
     else
-      case IbmClient.poll_job(config, job_id) do
-        {:ok, %{status: status}} = ok
-        when status in ["Completed", "Failed", "Cancelled", "Cancelled - Ran too long"] ->
-          ok
+      {:ok, connected} = Qx.Hardware.connect(cfg)
+      [first_backend | _] = connected.backends_list
+      backend_name = if is_binary(first_backend), do: first_backend, else: first_backend.name
+      cfg = %{connected | backend: backend_name}
 
-        {:ok, _} ->
-          Process.sleep(2_000)
-          poll_until_done(config, job_id, deadline)
+      circuit =
+        Qx.create_circuit(2, 2)
+        |> Qx.h(0)
+        |> Qx.cx(0, 1)
+        |> Qx.measure(0, 0)
+        |> Qx.measure(1, 1)
 
-        {:error, _} = error ->
-          error
-      end
+      result = Kino.Qx.run!(circuit, cfg)
+
+      assert %Qx.SimulationResult{} = result
+      assert map_size(result.counts) >= 1
+      total = Enum.reduce(result.counts, 0, fn {_b, n}, acc -> acc + n end)
+      assert total == cfg.shots
     end
   end
 end

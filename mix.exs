@@ -34,6 +34,7 @@ defmodule Kino.Qx.MixProject do
     [
       # Runtime
       {:kino, "~> 0.19"},
+      {:qx, path: "../qx"},
       {:req, "~> 0.5"},
       # Jason arrives transitively via Kino, but pin explicitly so the
       # smart cell's encode/decode behaviour can't drift if Kino

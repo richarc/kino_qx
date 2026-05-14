@@ -1,13 +1,17 @@
 defmodule Kino.Qx.StubClients do
   @moduledoc """
-  In-memory stub modules matching the `Kino.Qx.IbmClient` and
-  `Kino.Qx.Client` surfaces used by `Kino.Qx.TranspilePipeline`.
+  In-memory stub module matching the `Kino.Qx.Client` portal surface,
+  used by future tests in `test/kino/qx/run_test.exs` (Phase 4).
 
   Each stub looks up its scripted return value in an ETS-like Agent
   keyed by call name. Tests configure responses up-front, run the
-  pipeline, then assert on call order via the recorded log.
+  code under test, then assert on call order via the recorded log.
 
   This is the lightweight alternative to Mox (not in deps).
+
+  IBM-side stubs were removed when `Kino.Qx.IbmClient` moved upstream
+  into `Qx.Hardware.Ibm` (qx 0.7); IBM stubbing now lives in qx's
+  test support.
   """
 
   defmodule Recorder do
@@ -46,37 +50,6 @@ defmodule Kino.Qx.StubClients do
     end
 
     def calls(pid), do: Agent.get(pid, & &1.calls)
-  end
-
-  defmodule Ibm do
-    @moduledoc false
-    alias Kino.Qx.StubClients.Recorder
-
-    def iam_exchange(%{__recorder__: pid} = config),
-      do: Recorder.call(pid, :iam_exchange, [config])
-
-    def list_backends(%{__recorder__: pid} = config),
-      do: Recorder.call(pid, :list_backends, [config])
-
-    def fetch_backend_configuration(%{__recorder__: pid} = config, name),
-      do: Recorder.call(pid, :fetch_backend_configuration, [config, name])
-
-    def submit_sampler(%{__recorder__: pid} = config, qasm, backend, shots \\ 4096),
-      do: Recorder.call(pid, :submit_sampler, [config, qasm, backend, shots])
-
-    def poll_job(%{__recorder__: pid} = config, job_id),
-      do: Recorder.call(pid, :poll_job, [config, job_id])
-
-    def fetch_results(%{__recorder__: pid} = config, job_id),
-      do: Recorder.call(pid, :fetch_results, [config, job_id])
-
-    def cancel_job(%{__recorder__: pid} = config, job_id),
-      do: Recorder.call(pid, :cancel_job, [config, job_id])
-
-    def terminal_success?(status), do: status == "Completed"
-
-    def terminal_failure?(status),
-      do: status in ["Failed", "Cancelled", "Cancelled - Ran too long"]
   end
 
   defmodule Portal do

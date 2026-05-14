@@ -1,10 +1,15 @@
 defmodule Kino.Qx.Client do
   @moduledoc """
-  HTTP client for the Qx Portal API at `/api/v1`.
+  HTTP client for the snippet-browsing slice of the Qx Portal API
+  at `/api/v1`.
 
-  Wraps [Req](https://hexdocs.pm/req) so the cell never touches HTTP
-  details directly. Maps the documented error shapes to plain tuples
-  the cell can pattern-match on.
+  Wraps [Req](https://hexdocs.pm/req) so the snippet Smart Cell never
+  touches HTTP details directly. Maps the documented error shapes to
+  plain tuples the cell can pattern-match on.
+
+  Hardware-execution endpoints (`/api/v1/transpile`) live in
+  `Qx.Hardware.Portal` upstream — kino_qx delegates through
+  `Kino.Qx.run!/2` rather than calling them directly.
 
   All functions take a config map:
 
@@ -15,8 +20,6 @@ defmodule Kino.Qx.Client do
 
   ## Error mapping
 
-  Common to GET and POST:
-
   | HTTP                         | Returned                          |
   |------------------------------|-----------------------------------|
   | 200 OK                       | `{:ok, decoded_data}`             |
@@ -25,15 +28,6 @@ defmodule Kino.Qx.Client do
   | 429 + `retry-after` header   | `{:error, {:rate_limited, secs}}` |
   | Other 4xx/5xx                | `{:error, {:http, status, body}}` |
   | Network / Req exception      | `{:error, {:network, reason}}`    |
-
-  POST-only (`transpile/2`):
-
-  | HTTP | Returned                              |
-  |------|---------------------------------------|
-  | 422  | `{:error, :invalid_qasm}`             |
-  | 502  | `{:error, :transpile_failed}`         |
-  | 503  | `{:error, :transpile_unavailable}`    |
-  | 504  | `{:error, :transpile_timeout}`        |
   """
 
   @typedoc "Configuration map for every client call."
@@ -86,47 +80,6 @@ defmodule Kino.Qx.Client do
   @spec get_snippet(config(), integer() | String.t()) :: {:ok, snippet()} | {:error, term()}
   def get_snippet(config, id), do: get(config, "/api/v1/snippets/#{id}")
 
-  @typedoc "Successful transpile response payload."
-  @type transpile_result :: %{
-          qasm: String.t(),
-          metadata: %{
-            depth: non_neg_integer(),
-            size: non_neg_integer(),
-            num_qubits: non_neg_integer()
-          }
-        }
-
-  @doc """
-  Transpiles an OpenQASM 3.0 circuit for a target backend.
-
-  `payload` is a map matching the qxportal `/api/v1/transpile`
-  contract — typically:
-
-      %{
-        qasm: "OPENQASM 3.0; ...",
-        coupling_map: [[0, 1], [1, 2]],
-        basis_gates: ["id", "rz", "sx", "x", "cx"],
-        optimization_level: 1,
-        seed_transpiler: nil
-      }
-
-  Error mapping:
-
-  | HTTP | Returned                              |
-  |------|---------------------------------------|
-  | 200  | `{:ok, %{qasm, metadata}}`            |
-  | 401  | `{:error, :unauthorized}`             |
-  | 422  | `{:error, :invalid_qasm}`             |
-  | 429  | `{:error, {:rate_limited, secs}}`     |
-  | 502  | `{:error, :transpile_failed}`         |
-  | 503  | `{:error, :transpile_unavailable}`    |
-  | 504  | `{:error, :transpile_timeout}`        |
-  | other | `{:error, {:http, status, body}}`    |
-  """
-  @spec transpile(config(), map()) :: {:ok, transpile_result()} | {:error, term()}
-  def transpile(config, payload) when is_map(payload),
-    do: post(config, "/api/v1/transpile", payload)
-
   ## Internals
 
   defp get(%{token: token, base_url: base_url}, path) do
@@ -143,69 +96,37 @@ defmodule Kino.Qx.Client do
         retry: false
       )
 
-    handle_response(Req.get(request), :get)
+    handle_response(Req.get(request))
   end
 
-  defp post(%{token: token, base_url: base_url}, path, payload) do
-    url = String.trim_trailing(base_url, "/") <> path
-
-    request =
-      Req.new(
-        url: url,
-        json: payload,
-        headers: [
-          {"authorization", "Bearer " <> token},
-          {"accept", "application/json"}
-        ],
-        # Transpile can take longer than the read endpoints.
-        receive_timeout: 30_000,
-        retry: false
-      )
-
-    handle_response(Req.post(request), :post)
-  end
-
-  defp handle_response({:ok, %Req.Response{status: 200, body: %{"data" => data}}}, _verb),
+  defp handle_response({:ok, %Req.Response{status: 200, body: %{"data" => data}}}),
     do: {:ok, atomize(data)}
 
-  defp handle_response({:ok, %Req.Response{status: 401}}, _verb),
+  defp handle_response({:ok, %Req.Response{status: 401}}),
     do: {:error, :unauthorized}
 
-  defp handle_response({:ok, %Req.Response{status: 404}}, _verb),
+  defp handle_response({:ok, %Req.Response{status: 404}}),
     do: {:error, :not_found}
 
-  defp handle_response({:ok, %Req.Response{status: 422, body: body}}, :post),
-    do: {:error, {:invalid_qasm, error_detail(body)}}
-
-  defp handle_response({:ok, %Req.Response{status: 429} = resp}, _verb),
+  defp handle_response({:ok, %Req.Response{status: 429} = resp}),
     do: {:error, {:rate_limited, retry_after_seconds(resp)}}
 
-  defp handle_response({:ok, %Req.Response{status: 502}}, :post),
-    do: {:error, :transpile_failed}
-
-  defp handle_response({:ok, %Req.Response{status: 503}}, :post),
-    do: {:error, :transpile_unavailable}
-
-  defp handle_response({:ok, %Req.Response{status: 504}}, :post),
-    do: {:error, :transpile_timeout}
-
-  defp handle_response({:ok, %Req.Response{status: status, body: body}}, _verb),
+  defp handle_response({:ok, %Req.Response{status: status, body: body}}),
     do: {:error, {:http, status, body}}
 
-  defp handle_response({:error, %{reason: reason}}, _verb),
+  defp handle_response({:error, %{reason: reason}}),
     do: {:error, {:network, reason}}
 
-  defp handle_response({:error, exception}, _verb),
+  defp handle_response({:error, exception}),
     do: {:error, {:network, Exception.message(exception)}}
 
-  # Allow-list of atoms we know belong to the API contract. Anything
-  # outside this set stays a string key — protects against atom
-  # exhaustion if the portal ever adds an unexpected field.
+  # Allow-list of atoms we know belong to the snippet API contract.
+  # Anything outside this set stays a string key — protects against
+  # atom exhaustion if the portal ever adds an unexpected field.
   @known_keys ~w(
     id name email role api_key_name visibility share_url
     qasm_content elixir_content inserted_at updated_at
-    error detail
-    qasm metadata depth size num_qubits
+    error
   )a
 
   defp atomize(data) when is_list(data), do: Enum.map(data, &atomize/1)
@@ -223,12 +144,6 @@ defmodule Kino.Qx.Client do
   defp to_known_atom(key) when is_binary(key) do
     Enum.find(@known_keys, key, fn atom -> Atom.to_string(atom) == key end)
   end
-
-  # Extracts the portal's human-readable `detail` from an error body so
-  # the user sees "include not found" instead of just "invalid_qasm".
-  defp error_detail(%{"detail" => detail}) when is_binary(detail), do: detail
-  defp error_detail(%{"error" => err}) when is_binary(err), do: err
-  defp error_detail(_), do: nil
 
   defp retry_after_seconds(%Req.Response{} = resp) do
     case Req.Response.get_header(resp, "retry-after") do

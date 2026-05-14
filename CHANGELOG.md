@@ -9,7 +9,41 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-05-10
+## [0.2.0] - 2026-05-14
+
+**Breaking architectural reset.** A previously-drafted 0.2.0 design
+(all-in-one TranspileCell with embedded QASM + Submit button) never
+reached Hex. This release replaces it with a credentials Smart Cell +
+a `Kino.Qx.run!/2` pipeline function. The transpile / submit / poll /
+result-build core moved upstream into `Qx.Hardware` in the `:qx`
+library (0.7.0); `kino_qx` is now a thin UX layer.
+
+### Added
+
+- **`Kino.Qx.CredentialsCell`** — new Smart Cell registered as **"Qx Credentials"**. Collects portal URL, region, backend, optimization level, and shots; emits a `qx = %Qx.Hardware.Config{...}` binding for downstream cells. Tokens come from Livebook secrets (`LB_PORTAL_TOKEN`, `LB_IBM_API_KEY`, `LB_IBM_CRN`) — never asked for in the cell UI, never present in cell state, never written to the `.livemd`.
+- **`Kino.Qx.run/2,3`** and **`Kino.Qx.run!/2,3`** — pipeline functions that wrap `Qx.Hardware.run/3` with a live `Kino.Frame` status panel (✔ / ⏳ icons, queue position, elapsed seconds) and a best-effort cancel watcher. The watcher is an unlinked process that monitors the caller; if Livebook's "Stop" button fires during a run, the watcher calls `Qx.Hardware.cancel/3` for the in-flight IBM job.
+- **`Kino.Qx.RunError`** — raised by `run!/2,3` when `Qx.Hardware.run/3` returns `{:error, _}`. Carries the original reason; `Exception.message/1` describes it humanly.
+- **`Kino.Qx.Interrupted`** — raised when the cancel watcher detects abnormal caller death. Includes the job_id when known.
+- Required dep on `{:qx, "~> 0.7"}`.
+
+### Removed (BREAKING)
+
+- `Kino.Qx.TranspileCell` — superseded by `Kino.Qx.CredentialsCell` + `Kino.Qx.run!/2`.
+- `Kino.Qx.IbmClient` — moved upstream to `Qx.Hardware.Ibm`.
+- `Kino.Qx.TranspilePipeline` — absorbed into `Qx.Hardware.run/3`.
+- `Kino.Qx.Client.transpile/2` — moved upstream to `Qx.Hardware.Portal.transpile/3`. `Kino.Qx.Client` is now snippet-only (`/me`, `/snippets`, `/snippets/:id`) and serves the existing `Kino.Qx.SmartCell`.
+- Inline `Kino.DataTable` / `Kino.VegaLite` rendering inside the cell. Use `Qx.Draw.plot_counts/2` at the end of the `run!` pipeline instead.
+
+### Privacy invariant
+
+- Tokens are not held in cell state. `to_source/1` emits `System.fetch_env!("LB_PORTAL_TOKEN")` (and equivalents) as references, never string literals. The `.livemd` carries no secret bytes.
+
+### Notes
+
+- `kino` dependency stays at `~> 0.19` (latest on Hex; no Smart Cell API churn since 0.1.0).
+- Non-Livebook callers (CLI / Phoenix / OTP) can use `Qx.Hardware.run/3` directly from `:qx` with no `:kino` dep.
+
+## [0.2.0-pre] (unpublished — superseded)
 
 ### Added
 
