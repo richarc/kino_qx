@@ -9,34 +9,68 @@ defmodule Kino.Qx.Run do
 
   ## Architecture
 
-      caller cell process
+      caller cell process  (Process.flag(:trap_exit, true))
         │
         ├── frame = Kino.Frame.new() |> tap(&Kino.render/1)
         │
         ├── watcher = spawn(...)                  ← unlinked
-        │   └── monitors caller; if :DOWN, calls
-        │       Qx.Hardware.cancel/3 with the last-seen job_id
+        │   └── monitors caller; only fires Qx.Hardware.cancel/3
+        │       on the UNTRAPPABLE :kill path (see below)
         │
-        ├── on_status callback:
-        │     – appends a line to the frame
-        │     – broadcasts {:job_id, _} to the watcher when the
-        │       pipeline emits {:ibm, :job_started, _}
-        │     – forwards events to caller-supplied :on_status if any
+        ├── worker = Task.async(fn -> Hardware.run(...) end)
+        │   └── on_status sends {:status, event} back to the caller
         │
-        └── Qx.Hardware.run(circuit, config, on_status: on_status)
-              ← blocks synchronously
-              ← returns {:ok, %SimulationResult{}} | {:error, reason}
+        └── run_loop/1  (caller stays alive in a receive loop)
+              ├─ {:status, event}    → frame + job_id + caller cb
+              ├─ {ref, result}       → render terminal, :done, return
+              ├─ {:DOWN, ref, ...}   → worker crash, propagate
+              └─ {:EXIT, _, reason}  → trappable interrupt (below)
 
   ## Interrupt semantics
 
-  Livebook's "Stop" button may deliver `:shutdown` (trappable) or
-  `:kill` (untrappable). Either way the **caller dies**; the watcher
-  is unlinked so it survives and runs the cancel. If Livebook tears
-  down the entire session, the watcher dies too and the IBM job is
-  orphaned — runs to completion, burns shots. This is the silent
-  leak flagged in the plan's Risks section.
+  Livebook's "Stop" may deliver `:shutdown` (trappable) or `:kill`
+  (untrappable). The blocking hardware call runs in a worker `Task`
+  so the caller stays in `run_loop/1`:
+
+    * **`:shutdown` (trappable)** — the caller receives
+      `{:EXIT, _, :shutdown}`, brutally stops the worker, issues the
+      cancel **once itself**, signals the watcher `:done` (so the
+      watcher stands down and does NOT cancel again on the caller's
+      subsequent `:DOWN`), then **raises `Kino.Qx.Interrupted`** with
+      the last-seen `job_id`. This is the now-true contract.
+
+    * **`:kill` (untrappable)** — the caller dies immediately without
+      running its handler. Only here does the unlinked watcher fire
+      the cancel (its `{:DOWN, caller, reason != :normal}` arm). No
+      `Kino.Qx.Interrupted` is raised — the process is already gone.
+
+  ### Single-cancel gating
+
+  On the trappable path the caller cancels and then sends the watcher
+  `:done`. Erlang orders the `:done` message before the monitor
+  `:DOWN` generated when the caller later dies, so the watcher always
+  processes `:done` first and exits without cancelling — exactly one
+  `Qx.Hardware.cancel/3` fires (the caller's). On the `:kill` path the
+  caller never sends `:done`, so exactly one cancel fires (the
+  watcher's).
+
+  ### Residual races (honest caveats)
+
+    * **Spurious cancel.** If the caller is killed in the narrow
+      window *after* the worker returns but *before* `send(watcher,
+      :done)`, the watcher still sees an abnormal `:DOWN` and issues a
+      cancel for an already-finished job. `Qx.Hardware.cancel/3`
+      treats an IBM 404 as expected, so this is harmless noise.
+    * **Untrappable teardown.** A `:kill` (or a full Livebook session
+      teardown that also kills the watcher) leaves the IBM job
+      orphaned — it runs to completion and burns shots. This is the
+      silent leak flagged in the plan's Risks section; only the
+      upstream-side fix (job TTL / server cancel) fully closes it.
   """
 
+  require Logger
+
+  alias Kino.Qx.SafeReason
   alias Qx.Hardware
 
   @spec run!(Qx.QuantumCircuit.t(), Hardware.Config.t(), keyword()) ::
@@ -54,37 +88,124 @@ defmodule Kino.Qx.Run do
     frame = Kino.Frame.new() |> tap(&Kino.render/1)
     caller_on_status = Keyword.get(opts, :on_status, fn _ -> :ok end)
 
-    state_ref = make_ref()
-    state_key = {:kino_qx_state, state_ref}
+    # `:_hardware_mod` is an undocumented test seam — production callers
+    # never set it. Tests pass a stub module exposing `run/3` and `cancel/3`.
+    {hardware_mod, opts} = Keyword.pop(opts, :_hardware_mod, Hardware)
 
-    initial = %{
+    state = %{
       lines: [],
       started_at: System.monotonic_time(:millisecond),
       job_id: nil,
       frame: frame
     }
 
-    Process.put(state_key, initial)
-    render_frame(initial)
-
-    # `:_hardware_mod` is an undocumented test seam — production callers
-    # never set it. Tests pass a stub module exposing `run/3` and `cancel/3`.
-    {hardware_mod, opts} = Keyword.pop(opts, :_hardware_mod, Hardware)
+    render_frame(state)
 
     watcher = start_cancel_watcher(self(), config, hardware_mod)
+    caller = self()
 
-    on_status = build_on_status(state_key, watcher, caller_on_status)
-    hw_opts = Keyword.put(opts, :on_status, on_status)
+    # Trap exits so a Livebook "Stop" delivering :shutdown (trappable)
+    # arrives as a message we can act on — cancel the in-flight job and
+    # raise Kino.Qx.Interrupted. :kill is untrappable and still relies
+    # on the unlinked watcher (documented residual). Restore the prior
+    # flag in `after` so we don't leave the cell process trapping.
+    prev_trap = Process.flag(:trap_exit, true)
+
+    hw_opts =
+      Keyword.put(opts, :on_status, fn event -> send(caller, {:status, event}) end)
+
+    task = Task.async(fn -> hardware_mod.run(circuit, config, hw_opts) end)
 
     try do
-      result = hardware_mod.run(circuit, config, hw_opts)
-      state = Process.get(state_key)
-      render_terminal(state, result)
-      send(watcher, :done)
-      result
+      run_loop(%{
+        task: task,
+        state: state,
+        watcher: watcher,
+        caller_on_status: caller_on_status,
+        hardware_mod: hardware_mod,
+        config: config
+      })
     after
-      Process.delete(state_key)
+      Process.flag(:trap_exit, prev_trap)
     end
+  end
+
+  ## --------------------------------------------------------------
+  ## Caller receive loop — owns the frame, threads job_id, and is the
+  ## trappable-interrupt handler. The blocking hardware call runs in a
+  ## monitored worker Task so this loop stays alive to catch :shutdown.
+  ## --------------------------------------------------------------
+
+  defp run_loop(ctx) do
+    %{task: %Task{ref: task_ref, pid: task_pid} = task} = ctx
+
+    receive do
+      {:status, event} ->
+        ctx
+        |> handle_status(event)
+        |> run_loop()
+
+      {^task_ref, result} ->
+        Process.demonitor(task_ref, [:flush])
+        render_terminal(ctx.state, result)
+        send(ctx.watcher, :done)
+        result
+
+      {:DOWN, ^task_ref, :process, _pid, reason} ->
+        # Worker crashed without delivering a result. Demonitor for
+        # symmetry with the normal path (R2.3 / W7), stand the watcher
+        # down, then propagate the crash as the caller's own exit.
+        Process.demonitor(task_ref, [:flush])
+        send(ctx.watcher, :done)
+        exit(reason)
+
+      {:EXIT, ^task_pid, _reason} ->
+        # Linked worker exit signal — paired with {ref, result} or the
+        # abnormal :DOWN above, which carry the actual outcome. Ignore.
+        run_loop(ctx)
+
+      {:EXIT, _from, reason} when reason in [:shutdown, :killed] ->
+        # Livebook interrupt of THIS caller via the trappable path.
+        # Stop the worker, issue the cancel exactly once here, tell the
+        # watcher to stand down (so it does NOT re-cancel on our :DOWN),
+        # then raise so the contract (`Kino.Qx.Interrupted`) is real.
+        _ = Task.shutdown(task, :brutal_kill)
+
+        if ctx.state.job_id,
+          do: safe_cancel(ctx.hardware_mod, ctx.state.job_id, ctx.config)
+
+        send(ctx.watcher, :done)
+        raise Kino.Qx.Interrupted, job_id: ctx.state.job_id
+
+      {:EXIT, _from, _reason} ->
+        # Unrelated linked process exited (e.g. :normal). Ignore.
+        run_loop(ctx)
+    end
+  end
+
+  defp handle_status(ctx, event) do
+    case event do
+      {:ibm, :job_started, jid} when is_binary(jid) ->
+        send(ctx.watcher, {:job_id, jid})
+
+      _ ->
+        :ok
+    end
+
+    new_state = handle_status_event(ctx.state, event)
+    render_frame(new_state)
+
+    # A buggy caller-supplied callback must not crash the run loop, but
+    # don't swallow it silently either. Log the exception TYPE only —
+    # never the event or message (no value leak; S2).
+    try do
+      ctx.caller_on_status.(event)
+    rescue
+      e ->
+        Logger.warning("Kino.Qx: caller :on_status callback raised #{inspect(e.__struct__)}")
+    end
+
+    %{ctx | state: new_state}
   end
 
   ## --------------------------------------------------------------
@@ -111,43 +232,36 @@ defmodule Kino.Qx.Run do
       {:DOWN, ^ref, :process, _pid, reason} when reason != :normal ->
         # Caller died abnormally (Livebook interrupt or crash). Best-effort
         # cancel. We don't propagate failures — IBM 404 is expected if the
-        # job already terminated.
-        if job_id, do: hardware_mod.cancel(job_id, config)
+        # job already terminated. Guard the call: a raise here would crash
+        # the watcher and BEAM would dump its closure env (which captures
+        # `config`, i.e. tokens) into the Livebook log.
+        if job_id, do: safe_cancel(hardware_mod, job_id, config)
 
       {:DOWN, ^ref, :process, _pid, _normal} ->
         :ok
     end
   end
 
-  ## --------------------------------------------------------------
-  ## Status callback — forwards to watcher + frame + caller
-  ## --------------------------------------------------------------
-
-  defp build_on_status(state_key, watcher, caller_on_status) do
-    fn event ->
-      case event do
-        {:ibm, :job_started, job_id} when is_binary(job_id) ->
-          send(watcher, {:job_id, job_id})
-
-        _ ->
-          :ok
-      end
-
-      state = Process.get(state_key)
-      new_state = handle_status_event(state, event)
-      Process.put(state_key, new_state)
-      render_frame(new_state)
-
-      _ =
-        try do
-          caller_on_status.(event)
-        rescue
-          _ -> :ok
-        end
-
+  # Never let a cancel failure propagate: a raise/exit/throw here would
+  # crash the watcher and BEAM's crash report would `inspect` the
+  # closure env, leaking `config` (portal/IBM tokens) to the log. Log a
+  # fixed string only — never the reason, exception, or config.
+  defp safe_cancel(hardware_mod, job_id, config) do
+    hardware_mod.cancel(job_id, config)
+    :ok
+  rescue
+    _ ->
+      Logger.warning("Kino.Qx: cancel watcher failed to cancel in-flight job")
       :ok
-    end
+  catch
+    _, _ ->
+      Logger.warning("Kino.Qx: cancel watcher failed to cancel in-flight job")
+      :ok
   end
+
+  ## --------------------------------------------------------------
+  ## Status event → frame state
+  ## --------------------------------------------------------------
 
   defp handle_status_event(state, event) do
     state =
@@ -157,7 +271,8 @@ defmodule Kino.Qx.Run do
       end
 
     line = render_event_line(event, state)
-    %{state | lines: state.lines ++ [line]}
+    # Prepend (O(1)); render_frame/1 reverses once (W6: was O(n²)).
+    %{state | lines: [line | state.lines]}
   end
 
   ## --------------------------------------------------------------
@@ -185,9 +300,15 @@ defmodule Kino.Qx.Run do
   defp render_event_line({:ibm, :job_started, job_id}, _),
     do: "✔ submitted: `#{job_id}`"
 
+  # Poll-key contract (S3): upstream `Qx.Hardware` emits
+  # `{:ibm, :polling, status}` with `status` a BINARY (hardware.ex);
+  # the underlying poll-status map is ATOM-keyed (`%{status:, reason:}`)
+  # and never crosses into kino_qx. The binary clause below is the real
+  # production path; this map clause stays only for the atom-keyed test
+  # seam / forward-compat — no string-key fallback (it can't occur).
   defp render_event_line({:ibm, :polling, %{} = poll}, state) do
-    status = Map.get(poll, :status) || Map.get(poll, "status") || "polling"
-    queue = Map.get(poll, :queue_position) || Map.get(poll, "queue_position")
+    status = Map.get(poll, :status, "polling")
+    queue = Map.get(poll, :queue_position)
     elapsed = elapsed_seconds(state)
     queue_part = if queue, do: " (queue: #{queue})", else: ""
     "⏳ #{status}#{queue_part} (#{elapsed}s)"
@@ -201,34 +322,23 @@ defmodule Kino.Qx.Run do
     do: "⏳ fetching results…"
 
   defp render_event_line(other, _),
-    do: "· " <> inspect(other)
+    do: "· " <> SafeReason.describe(other)
 
+  # `state.lines` is kept newest-first (prepended); reverse once here.
   defp render_frame(state) do
-    markdown = Enum.join(state.lines, "  \n")
+    markdown = state.lines |> Enum.reverse() |> Enum.join("  \n")
     Kino.Frame.render(state.frame, Kino.Markdown.new(markdown))
   end
 
   defp render_terminal(state, {:ok, _result}) do
     line = "✔ done in #{elapsed_seconds(state)}s"
-    render_frame(%{state | lines: state.lines ++ [line]})
+    render_frame(%{state | lines: [line | state.lines]})
   end
 
   defp render_terminal(state, {:error, reason}) do
-    line = "✖ error: " <> error_summary(reason)
-    render_frame(%{state | lines: state.lines ++ [line]})
+    line = "✖ error: " <> SafeReason.describe(reason)
+    render_frame(%{state | lines: [line | state.lines]})
   end
-
-  defp error_summary({:network, _}), do: "network failure"
-  defp error_summary({:http, status, _body}), do: "HTTP #{status}"
-  defp error_summary({:rate_limited, secs}) when is_integer(secs), do: "rate limited (#{secs}s)"
-
-  defp error_summary({stage, reason}) when is_atom(stage),
-    do: "#{stage}: #{error_summary(reason)}"
-
-  defp error_summary(:unauthorized), do: "unauthorized"
-  defp error_summary(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp error_summary(reason) when is_binary(reason), do: reason
-  defp error_summary(other), do: inspect(other)
 
   defp elapsed_seconds(state) do
     div(System.monotonic_time(:millisecond) - state.started_at, 1000)

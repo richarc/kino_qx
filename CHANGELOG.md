@@ -9,6 +9,28 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
+### Changed
+
+- **Interrupt contract is now real.** On Livebook's trappable "Stop"
+  (`:shutdown`), `Kino.Qx.run/2,3` / `run!/2,3` now traps the exit,
+  runs the in-flight `Qx.Hardware.cancel/3` exactly once, and
+  **raises `Kino.Qx.Interrupted`** (with the last-seen `job_id`).
+  Previously the exception type existed but was never raised — the
+  caller just died and only the watcher cancelled. The unlinked
+  watcher is retained solely as the `:kill` (untrappable) safety net.
+
+### Security
+
+- `Qx.Hardware.Config` (which holds the portal token, IBM API key,
+  IBM CRN, and IAM access token) is no longer reachable by
+  `inspect/1` in any error/status path. A new `Kino.Qx.SafeReason`
+  redacts an embedded `%Config{}` at any common nesting depth and
+  collapses unknown reasons to a fixed string instead of inspecting
+  them. The cancel watcher's `Qx.Hardware.cancel/3` is wrapped so a
+  raised error can no longer crash-dump the closure env (tokens) to
+  the Livebook log. (Upstream root-cause fix — `@derive Inspect` on
+  `Qx.Hardware.Config` — tracked as a `qx` bug.)
+
 ## [0.2.0] - 2026-05-14
 
 **Breaking architectural reset.** A previously-drafted 0.2.0 design
@@ -23,7 +45,7 @@ library (0.7.0); `kino_qx` is now a thin UX layer.
 - **`Kino.Qx.CredentialsCell`** — new Smart Cell registered as **"Qx Credentials"**. Collects portal URL, region, backend, optimization level, and shots; emits a `qx = %Qx.Hardware.Config{...}` binding for downstream cells. Tokens come from Livebook secrets (`LB_PORTAL_TOKEN`, `LB_IBM_API_KEY`, `LB_IBM_CRN`) — never asked for in the cell UI, never present in cell state, never written to the `.livemd`.
 - **`Kino.Qx.run/2,3`** and **`Kino.Qx.run!/2,3`** — pipeline functions that wrap `Qx.Hardware.run/3` with a live `Kino.Frame` status panel (✔ / ⏳ icons, queue position, elapsed seconds) and a best-effort cancel watcher. The watcher is an unlinked process that monitors the caller; if Livebook's "Stop" button fires during a run, the watcher calls `Qx.Hardware.cancel/3` for the in-flight IBM job.
 - **`Kino.Qx.RunError`** — raised by `run!/2,3` when `Qx.Hardware.run/3` returns `{:error, _}`. Carries the original reason; `Exception.message/1` describes it humanly.
-- **`Kino.Qx.Interrupted`** — raised when the cancel watcher detects abnormal caller death. Includes the job_id when known.
+- **`Kino.Qx.Interrupted`** — exception type for caller interruption during a run; includes the job_id when known. (Wired to actually raise in [Unreleased] — see above.)
 - Required dep on `{:qx, "~> 0.7"}`.
 
 ### Removed (BREAKING)

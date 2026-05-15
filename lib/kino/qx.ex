@@ -22,6 +22,7 @@ defmodule Kino.Qx do
   watcher around the same call.
   """
 
+  alias Kino.Qx.Run
   alias Qx.Hardware
 
   @doc """
@@ -40,7 +41,7 @@ defmodule Kino.Qx do
   @spec run(Qx.QuantumCircuit.t(), Hardware.Config.t(), keyword()) ::
           {:ok, Qx.SimulationResult.t()} | {:error, term()}
   def run(circuit, config, opts \\ []),
-    do: Kino.Qx.Run.run(circuit, config, opts)
+    do: Run.run(circuit, config, opts)
 
   @doc """
   Like `run/3` but raises `Kino.Qx.RunError` on failure and returns
@@ -54,7 +55,7 @@ defmodule Kino.Qx do
   @spec run!(Qx.QuantumCircuit.t(), Hardware.Config.t(), keyword()) ::
           Qx.SimulationResult.t()
   def run!(circuit, config, opts \\ []),
-    do: Kino.Qx.Run.run!(circuit, config, opts)
+    do: Run.run!(circuit, config, opts)
 
   @doc """
   Returns the version of `:kino_qx` reported in `mix.exs`.

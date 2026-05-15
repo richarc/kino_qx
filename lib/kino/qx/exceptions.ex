@@ -5,32 +5,31 @@ defmodule Kino.Qx.RunError do
 
   The original error reason is available as `:reason`.
   """
+  alias Kino.Qx.SafeReason
+
   defexception [:reason]
 
   @impl true
   def message(%{reason: reason}) do
-    "Qx hardware run failed: " <> describe(reason)
+    "Qx hardware run failed: " <> SafeReason.describe(reason)
   end
-
-  defp describe(:unauthorized), do: "unauthorized"
-  defp describe({:rate_limited, secs}) when is_integer(secs), do: "rate limited (#{secs}s)"
-  defp describe({:network, _}), do: "network failure"
-  defp describe({:http, status, _body}), do: "HTTP #{status}"
-  defp describe({stage, reason}) when is_atom(stage), do: "[#{stage}] #{describe(reason)}"
-  defp describe(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp describe(reason) when is_binary(reason), do: reason
-  defp describe(other), do: inspect(other)
 end
 
 defmodule Kino.Qx.Interrupted do
   @moduledoc """
-  Raised when `Kino.Qx.run!/2,3` detects that the caller cell process
-  was interrupted (Livebook "Stop" button) during a hardware run.
+  Raised by `Kino.Qx.run/2,3` and `Kino.Qx.run!/2,3` when the caller
+  cell process is interrupted via Livebook's **trappable** "Stop"
+  (`:shutdown`) while a hardware run is in flight.
 
-  When raised, the cancel watcher has already issued a best-effort
-  `Qx.Hardware.cancel/3` for any in-flight job — though delivery is
-  not guaranteed because the parent process may have been killed
-  abruptly via `:kill` (untrappable).
+  Before raising, the caller issues a best-effort
+  `Qx.Hardware.cancel/3` for any in-flight job (the `:job_id` field
+  carries the last-seen job id, or `nil` if no job had started yet).
+
+  This exception is **not** raised on the untrappable `:kill` path:
+  there the caller dies immediately and the unlinked cancel watcher
+  is the only line of defence — cancel is attempted but no exception
+  surfaces because the process is already gone. See
+  `Kino.Qx.Run`'s "Interrupt semantics" for the full contract.
   """
   defexception [:job_id]
 

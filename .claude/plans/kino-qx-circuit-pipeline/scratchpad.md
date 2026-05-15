@@ -22,6 +22,22 @@
 
 (none yet)
 
+## Remediation notes (2026-05-15)
+
+- **Discovered during R7:** `test/kino/qx/credentials_cell_test.exs`
+  carried a pre-existing stray **NUL byte** (offset 6274, predates
+  this branch — old git blob was already "Bin"). It compiled fine but
+  made `git diff` treat the file as binary, which would have hidden
+  the R3.3/R5.2 test additions from PR review. Stripped with
+  `tr -d '\0'`; re-added the trailing-space `"us-south "` reject case
+  that the strip had collapsed to the *valid* `"us-south"`. File is
+  now UTF-8 text; full suite green. In-scope (this remediation already
+  edits that file) — not filed to bd.
+- **R2.1 stub seam change:** `StubHardware` moved off the process
+  dictionary to `:persistent_term` because `run/3` now runs the
+  hardware call in a worker `Task` (different process). Required for
+  the interrupt tests to see the scripted return/events.
+
 ## Open Questions
 
 - Hex publish state of qx 0.7.0 — check at Phase 9.1 (`mix hex.info qx`).
@@ -36,3 +52,6 @@
 - Codebase scan: `.claude/plans/kino-qx-circuit-pipeline/research/codebase-scan.md`
 - Upstream: `../qx/.claude/plans/qx-hardware/plan.md` (complete; `Qx.Hardware` shipped locally at 0.7.0)
 - Next: open fresh session, run `/phx:work .claude/plans/kino-qx-circuit-pipeline/plan.md`
+
+- 22:48 WARN: requirements-verifier Write to reviews/ was sandbox-denied; orchestrator persisted reviews/requirements-remediation.md from agent message. X1 corrected UNCLEAR→MET (qx-o9h verified via bd show this session). 17 MET / 0 UNMET.
+- 22:49 WARN: security-analyzer Write to reviews/ sandbox-denied; orchestrator persisted reviews/security-remediation-review.md from agent message. Verdict PASS WITH WARNINGS — B1/W5 CLOSED, R2 SOUND, no BLOCKER.

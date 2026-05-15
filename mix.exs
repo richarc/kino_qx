@@ -49,10 +49,11 @@ defmodule Kino.Qx.MixProject do
 
   defp description do
     """
-    Livebook Smart Cells for the Qx Portal. Browse and inject saved
-    OpenQASM / Elixir snippets into a notebook, OR transpile an
-    OpenQASM 3.0 circuit via the portal and submit it to IBM Quantum
-    directly — measurement counts render inline.
+    Livebook Smart Cells for Qx. A "Qx Credentials" cell builds a
+    %Qx.Hardware.Config{} (tokens sourced from Livebook secrets, never
+    persisted), and Kino.Qx.run!/2 pipes a circuit through Qx.Hardware
+    onto real IBM Quantum hardware with a live status panel. Also
+    ships the "Qx Snippet" cell for browsing saved Qx Portal snippets.
     """
   end
 

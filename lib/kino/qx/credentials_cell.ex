@@ -67,8 +67,10 @@ defmodule Kino.Qx.CredentialsCell do
       the cached `backends_list`; `portal_base_url` matches the host
       allowlist.
     * **#11** — no long-lived processes. The Connect task is
-      short-lived and link-spawned to the cell process; it dies with
-      the cell.
+      short-lived (auth + list backends, then `send/2` the result and
+      exit). It is **unlinked** (`Task.start/1`) so a `do_connect/1`
+      raise can't wipe cell state; orphan risk is nil because the
+      task self-terminates after one `send/2`.
   """
   use Kino.JS
   use Kino.JS.Live
@@ -137,8 +139,16 @@ defmodule Kino.Qx.CredentialsCell do
   end
 
   def handle_event("update_ibm_region", %{"value" => value}, ctx)
-      when value in @valid_regions do
-    {:noreply, assign(ctx, ibm_region: value)}
+      when is_binary(value) do
+    if valid_ibm_region?(value) do
+      {:noreply, assign(ctx, ibm_region: value, error: nil)}
+    else
+      {:noreply, set_error(ctx, "Invalid region.")}
+    end
+  end
+
+  def handle_event("update_ibm_region", _params, ctx) do
+    {:noreply, set_error(ctx, "Invalid region.")}
   end
 
   def handle_event("update_backend", %{"value" => value}, ctx) when is_binary(value) do
@@ -170,7 +180,10 @@ defmodule Kino.Qx.CredentialsCell do
   def handle_event("connect", _params, ctx) do
     parent = self()
 
-    Task.start_link(fn ->
+    # Unlinked on purpose: a raise inside do_connect/1 must NOT take
+    # the cell process down with it (that would wipe cell state). The
+    # result is delivered via send/2, so a link buys nothing here.
+    Task.start(fn ->
       send(parent, {:connect_result, do_connect(ctx)})
     end)
 
@@ -369,6 +382,13 @@ defmodule Kino.Qx.CredentialsCell do
   end
 
   def validate_portal_url(_), do: nil
+
+  # Region allowlist predicate. `@doc false` + public so it is unit
+  # testable without the live Kino runtime (same convention as
+  # `validate_portal_url/1`); `handle_event/3` isn't drivable here.
+  @doc false
+  @spec valid_ibm_region?(any()) :: boolean()
+  def valid_ibm_region?(region), do: region in @valid_regions
 
   defp portal_host_allowed?(host) do
     host in @portal_host_allowlist or

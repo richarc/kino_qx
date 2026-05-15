@@ -24,3 +24,28 @@
 - 2026-05-14 — /phx:full started. Path-dep mode confirmed (per scratchpad).
 - 2026-05-14 — Phase 0 completed (branch + verification, no destructive changes). Handed off to a fresh session before Phase 1 to keep context clean for the ~58 remaining tasks.
 - 2026-05-14 — Phases 1–8 executed end-to-end. Mid-Phase-3 design pivot: the cell does NOT collect tokens (the plan's literal sketch would leak via the persisted .livemd source); adopted kino_db's Livebook-secrets pattern instead (`LB_PORTAL_TOKEN`, `LB_IBM_API_KEY`, `LB_IBM_CRN`). Recorded in scratchpad. Phase 9 blocked on qx 0.7.0 reaching Hex.
+
+## Remediation (2026-05-15)
+
+Post-review remediation of the 16 triaged findings (B1, W1–W9,
+S1–S6) + cross-repo X1. Driven by
+`.claude/plans/kino-qx-circuit-pipeline/remediation-plan.md`, on the
+same `feat/credentials-cell` branch. All phases R1–R7 complete.
+
+| Phase | Status | Notes |
+|---|---|---|
+| R1 — Token-leak blocker (B1,S1,W5) | COMPLETED | New `Kino.Qx.SafeReason` redacts `%Qx.Hardware.Config{}` at any nesting + never `inspect`s unknown reasons; applied at run.ex (terminal + event-line) + exceptions.ex (S1 dedup); `safe_cancel/3` wraps the watcher cancel. Regression tests added. |
+| R2 — Interrupt path (W1,W2,W7,W8) | COMPLETED | `run/3` rewritten: `trap_exit` + `Task.async` worker + `run_loop/1`; trappable `:shutdown` now cancels once **and raises `Kino.Qx.Interrupted`** (job_id threaded); `:kill` stays watcher-only. Single-cancel gating + residual races documented. 4 interrupt tests. |
+| R3 — Cell correctness (W3,W4) | COMPLETED | `update_ibm_region` no-crash fallback + `valid_ibm_region?/1`; Connect `Task.start_link`→`Task.start`. Region-allowlist tests. |
+| R4 — Polish (W6,W9,S2,S3) | COMPLETED | O(n²)→O(n) line accumulation; mix.exs description rewritten; `on_status` rescue narrowed (type-only log); poll-key contract pinned (upstream binary, atom-keyed map). |
+| R5 — Test hardening (S4,S5,S6) | COMPLETED | `StubHardware` → `test/support/`; SSRF matrix +IPv6/RFC-1918; public-entrypoint smoke. |
+| R6 — Cross-repo (X1) | COMPLETED | **B1 closed locally** via `Kino.Qx.SafeReason` (defence-in-depth). Root-cause **X1 filed upstream as `qx-o9h`** (`qx` bd, P1, `discovered-from:kino-qx-circuit-pipeline`) — add `@derive Inspect` to `Qx.Hardware.Config`. No qx code edited from this branch. |
+| R7 — Verify + re-review | COMPLETED | `mix compile --warnings-as-errors` clean; `mix format --check-formatted` clean; `mix test` → 1 doctest + 65 tests + 0 failures + 4 excluded; `mix credo --strict` **0 issues** (aliased away the prior 2+ design suggestions). |
+
+- 2026-05-15 — Remediation R1–R7 executed end-to-end in one session.
+  No blockers, no dead-ends. B1 is closed locally as defence-in-depth;
+  the root-cause fix lives upstream in `qx-o9h` (must land in `qx/`
+  and ship before kino_qx's `:qx` dep bump). Recommend a focused
+  `/phx:review security` on `run.ex` + `exceptions.ex` before the
+  branch opens for PR (per remediation-plan R7.6). Phase 9 (Hex
+  publish) remains BLOCKED on qx 0.7.0.

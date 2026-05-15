@@ -24,28 +24,11 @@ S3→R4.4 · S4→R5.1 · S5→R5.2 · S6→R5.3 · X1→R6.1. None deferred.
 
 ## Phase R1 — Security blocker: token-leak via `inspect/1` (B1, S1, W5)
 
-- [ ] **R1.1** Add `Kino.Qx.SafeReason` (or a private `safe_reason/1` shared
-  by `run.ex` + `exceptions.ex`) — the single error-reason→string mapper
-  (folds S1). It MUST:
-  - pattern-match `%Qx.Hardware.Config{}` (at any nesting depth in common
-    shapes: bare, `{stage, %Config{}}`, `{:error, %Config{}}`) → emit
-    `"config (redacted)"`
-  - never call `inspect/1` on an arbitrary/unknown reason; for unknown
-    shapes emit a fixed `"unexpected error"` (no value interpolation)
-  - keep the existing friendly mappings (`:unauthorized`, `{:http, s, _}`,
-    `{:rate_limited, n}`, `{:network, _}`, `{stage, reason}` recursion)
-- [ ] **R1.2** Apply at all three sites: `run.ex:231` (`error_summary/1`),
-  `run.ex:204` (`render_event_line(other, _)`), `exceptions.ex:22`
-  (`RunError.describe/1`). Delete the now-duplicate logic (S1).
-- [ ] **R1.3 [security]** `run.ex:115` — wrap the watcher `cancel/3` in
-  `try/rescue` so a raise can't surface a crash report that `inspect`s the
-  closure env (which captures `config` with tokens). Log a fixed string on
-  failure, never the reason/config.
-- [ ] **R1.4 [test]** Regression test in `run_test.exs`: assert
-  `Kino.Qx.RunError` message for `{:some_stage, %Qx.Hardware.Config{...}}`
-  and for a bare `%Config{}` contains neither the portal token nor the IBM
-  key sentinel; assert the same for the frame-rendered terminal/error line.
-- [ ] **R1.5** `mix compile --warnings-as-errors` + `mix test test/kino/qx/run_test.exs`.
+- [x] **R1.1** Add `Kino.Qx.SafeReason` — new module `lib/kino/qx/safe_reason.ex`, public `describe/1`. Redacts `%Config{}` bare / `{:error,%Config{}}` / `{stage,%Config{}}` + recurses `{stage,reason}`; unknown shape → fixed `"unexpected error"` (no inspect); friendly mappings kept (S1 folded).
+- [x] **R1.2** Applied at all three sites: `run.ex` `render_terminal/2` error arm + `render_event_line(other,_)` now call `SafeReason.describe/1`; `error_summary/*` cluster deleted; `exceptions.ex` `RunError.message/1` delegates to `SafeReason.describe/1`, private `describe/*` deleted (S1).
+- [x] **R1.3 [security]** `run.ex` — added `safe_cancel/3`; abnormal `:DOWN` arm calls it; rescues raise + catches exit/throw, logs a fixed string only (no reason/config). `require Logger` added.
+- [x] **R1.4 [test]** `run_test.exs` "B1 — token-leak regression" describe block: sentinel-token `secret_config/0` + `refute_leaks/1`; covers bare/`{stage,_}`/`{:error,_}`/nested + unknown-shape + friendly mappings + a real `{:error,{stage,%Config{}}}` run/3 return. Frame line == `"✖ error: " <> SafeReason.describe` so SafeReason coverage = frame coverage.
+- [x] **R1.5** `mix compile --warnings-as-errors` clean; `mix test test/kino/qx/run_test.exs` → 15 tests, 0 failures; `mix format` applied.
 
 ## Phase R2 — Interrupt path: raise `Kino.Qx.Interrupted` (W1, W2, W7, W8)
 
@@ -57,103 +40,47 @@ the loop) detects the signal, tells the watcher to cancel, and raises
 `Kino.Qx.Interrupted` (with `job_id` when known). `:kill` remains
 untrappable — document that residual.
 
-- [ ] **R2.1 [spike]** Rewrite `Kino.Qx.Run.run/3`:
-  - `Process.flag(:trap_exit, true)` (save/restore prior value in `after`)
-  - worker `Task` runs `hardware_mod.run/3`; caller `receive`s `{:status,_}`,
-    `{task_ref, result}`, `{:DOWN, task_ref, ...}`, and `{:EXIT, _, reason}`
-  - on `{:EXIT, _, reason}` with `reason in [:shutdown, :killed]`: signal
-    the watcher (or directly call `cancel/3` once, guarded), then
-    `raise Kino.Qx.Interrupted, job_id: current_job_id`
-  - keep the unlinked watcher ONLY as the `:kill` safety net (untrappable
-    path); on the trappable path the caller handles cancel+raise so we
-    don't double-cancel — gate the watcher on a `:done`/`:interrupted`
-    signal so exactly one cancel fires.
-  - `run!/3` lets `Kino.Qx.Interrupted` propagate (do NOT wrap it in
-    `RunError`).
-- [ ] **R2.2 [test]** `run_test.exs` interrupt cases (clears §4.8 UNMET):
-  - block stub `run/3` on a `receive`; `Process.exit(caller, :shutdown)`;
-    `assert_receive :stub_cancel_called`; assert `Kino.Qx.Interrupted` is
-    raised with the expected `job_id`
-  - assert a `:normal` completion does NOT call `cancel`
-  - assert exactly ONE cancel fires (no double-cancel between caller and
-    watcher)
-  - assert `job_id` is threaded when `{:ibm, :job_started, id}` precedes
-    the interrupt
-- [ ] **R2.3** `run.ex` add `Process.demonitor(ref, [:flush])` on the
-  abnormal `:DOWN` arm for symmetry (W7).
-- [ ] **R2.4** `run.ex` `@moduledoc`: document the spurious-cancel race and
-  the single-cancel gating; update the interrupt-semantics section to state
-  `Kino.Qx.Interrupted` IS raised on the trappable path, `:kill` is the
-  residual orphan case (W8).
-- [ ] **R2.5** Update `exceptions.ex` `Kino.Qx.Interrupted` `@moduledoc`
-  and `CHANGELOG.md` so the contract matches reality (it now raises).
-- [ ] **R2.6** `mix compile --warnings-as-errors` + full `mix test`.
+- [x] **R2.1 [spike]** Rewrote `Kino.Qx.Run.run/3`: `Process.flag(:trap_exit,true)` w/ `prev_trap` restore in `after`; `Task.async` worker runs `hardware_mod.run/3`; on_status sends `{:status,event}` to caller; new `run_loop/1` handles `{:status,_}` / `{ref,result}` / abnormal `{:DOWN,ref,_}` (propagates via `exit/1`) / `{:EXIT,task_pid,_}` (ignore) / `{:EXIT,_,reason in [:shutdown,:killed]}` → `Task.shutdown(:brutal_kill)` + single guarded `safe_cancel` + `send(watcher,:done)` + `raise Kino.Qx.Interrupted, job_id:`. `run!/3` unchanged (no rescue → Interrupted propagates). Watcher kept as `:kill`-only net via `:done` gating. `build_on_status/3` deleted; `handle_status/2` added.
+- [x] **R2.2 [test]** `run_test.exs` "interrupt path" describe: blocking stub (`block: true` via :persistent_term — stub moved off pdict since worker runs in a Task), `spawn` runner + `Process.exit(runner,:shutdown)`, sync on `{:saw,:job_started}`. Covers: cancel fires + `Interrupted{job_id:"job_INT"}` raised; interrupt-before-job → `job_id: nil` + no cancel; normal completion no cancel; exactly-one-cancel (`refute_receive` after); `run!/3` propagates Interrupted not RunError.
+- [x] **R2.3** Folded into R2.1 — abnormal `:DOWN` arm calls `Process.demonitor(task_ref,[:flush])` for symmetry with the normal-completion arm (W7).
+- [x] **R2.4** `run.ex` `@moduledoc` rewritten: new architecture diagram, `:shutdown` vs `:kill` semantics, "Single-cancel gating" (Erlang message/`:DOWN` ordering), "Residual races" (spurious cancel + untrappable teardown) (W8).
+- [x] **R2.5** `exceptions.ex` `Kino.Qx.Interrupted` `@moduledoc` rewritten (raised by run/run! on trappable `:shutdown`, not on `:kill`); `CHANGELOG.md` [Unreleased] Changed+Security blocks added; 0.2.0 Interrupted line de-claimed.
+- [x] **R2.6** `mix compile --warnings-as-errors` clean; full `mix test` → 1 doctest, 58 tests, 0 failures, 4 excluded.
 
 ## Phase R3 — Cell correctness (W3, W4)
 
-- [ ] **R3.1** `credentials_cell.ex:139` — add `update_ibm_region` fallback
-  clause: non-allowlisted value → `set_error(ctx, "Invalid region.")`,
-  `{:noreply, ctx}` (Iron Law #8).
-- [ ] **R3.2** `credentials_cell.ex` connect handler — `Task.start_link/1`
-  → `Task.start/1` (a `do_connect/1` raise must not wipe cell state; result
-  is delivered via `send/2` so the link is pointless).
-- [ ] **R3.3 [test]** `credentials_cell_test.exs` — add a case asserting an
-  invalid region is rejected via the error path, not a crash. (handle_event
-  needs the live Kino runtime; if not directly drivable, assert the guard +
-  fallback shape per the file's existing convention.)
-- [ ] **R3.4** `mix test test/kino/qx/credentials_cell_test.exs`.
+- [x] **R3.1** `credentials_cell.ex` — `update_ibm_region` now `is_binary` guard + `if valid_ibm_region?/1` (assign w/ `error: nil`) `else set_error(ctx, "Invalid region.")`; plus a non-binary `_params` fallback clause → `set_error`. No more FunctionClauseError (Iron Law #8). Added `@doc false valid_ibm_region?/1` predicate (mirrors `validate_portal_url/1` testable convention).
+- [x] **R3.2** `credentials_cell.ex` connect handler `Task.start_link/1` → `Task.start/1` (unlinked: a `do_connect/1` raise must not wipe cell state; result via `send/2`). Iron Law #11 moduledoc note updated to match (unlinked, self-terminating).
+- [x] **R3.3 [test]** `credentials_cell_test.exs` "valid_ibm_region?/1" describe — asserts allowlisted pass; rejects non-allowlisted/malformed/non-binary (`"us-east"`, `""`, `"US-SOUTH"`, padded, nil, 42, %{}, atom). Drives the predicate behind the error-path branch (handle_event not runtime-drivable, per file convention).
+- [x] **R3.4** `mix compile --warnings-as-errors` clean; `mix test test/kino/qx/credentials_cell_test.exs` → 20 tests, 0 failures; `mix format` applied.
 
 ## Phase R4 — Polish (W6, W9, S2, S3)
 
-- [ ] **R4.1** `run.ex` — accumulate status lines with `[line | lines]`,
-  reverse once in `render_frame/1`; fix `render_terminal/2` likewise (W6).
-- [ ] **R4.2** `mix.exs:53-57` — rewrite `description/0` for the new
-  credentials-cell + `Kino.Qx.run!` pipeline (W9).
-- [ ] **R4.3** `run.ex:141-147` — narrow the caller `on_status` `rescue`
-  to `rescue e -> Logger.warning(...)` (no value leak) instead of bare
-  `rescue _ -> :ok` (S2).
-- [ ] **R4.4** `run.ex:188-189` — pin the poll-key contract. Check upstream
-  `Qx.Hardware` poll-status key type; if atom-keyed, drop the string
-  fallback; else add a stub test exercising the string-key path (S3).
-- [ ] **R4.5** `mix compile --warnings-as-errors` + `mix format` + `mix test`.
+- [x] **R4.1** `run.ex` — `handle_status_event/2` + both `render_terminal/2` clauses prepend `[line | lines]`; `render_frame/1` does `Enum.reverse |> Enum.join` once (W6: O(n²)→O(n)).
+- [x] **R4.2** `mix.exs` `description/0` rewritten — Qx Credentials cell (secrets-sourced `%Config{}`) + `Kino.Qx.run!/2` pipeline + Qx Snippet cell; dropped the removed TranspileCell wording (W9).
+- [x] **R4.3** `run.ex` `handle_status/2` — `rescue _ -> :ok` → `rescue e -> Logger.warning("... #{inspect(e.__struct__)}")` (logs exception TYPE only, no event/message value leak; S2).
+- [x] **R4.4** `run.ex` — verified upstream: `Qx.Hardware` emits `{:ibm,:polling,status}` with `status` a **binary** (`hardware.ex:44`, line 400); poll map is atom-keyed internally, never crosses over. Dropped the `Map.get(poll,"status")`/`"queue_position"` string fallbacks; kept the atom-keyed map clause (test seam) with a contract-pinning comment (S3). No string-key test needed (path can't occur).
+- [x] **R4.5** `mix format` + `mix compile --warnings-as-errors` clean; full `mix test` → 1 doctest, 60 tests, 0 failures, 4 excluded.
 
 ## Phase R5 — Test hardening (S4, S5, S6)
 
-- [ ] **R5.1** Move inline `StubHardware` → `test/support/stub_hardware.ex`
-  (mirror `StubClients` placement); update `run_test.exs` to alias it (S4).
-- [ ] **R5.2** `credentials_cell_test.exs` — extend the SSRF matrix:
-  IPv6 (`http://[::1]`, `https://[::1]`), RFC-1918
-  (`http://10.0.0.1`, `http://192.168.1.1`, `http://172.16.0.1`),
-  asserting each → `nil` (S5).
-- [ ] **R5.3** `run_test.exs` — add a smoke test through the public
-  2-arity `Kino.Qx.run/2` and `Kino.Qx.run!/2` (no opts), via the
-  `:_hardware_mod` seam (S6).
-- [ ] **R5.4** Full `mix test`.
+- [x] **R5.1** Moved nested `Kino.Qx.RunTest.StubHardware` → `test/support/stub_hardware.ex` as `Kino.Qx.StubHardware` (mirrors `StubClients`; @moduledoc documents the :persistent_term/Task rationale + script keys). `run_test.exs` now `alias Kino.Qx.StubHardware` (S4).
+- [x] **R5.2** `credentials_cell_test.exs` SSRF describe — added "rejects IPv6 loopback" (`http`/`https://[::1]` ±port) and "rejects RFC-1918 private ranges" (10.x, 192.168.x, 172.16.x ×http/https) → all `nil`. No code change (existing `validate_portal_url/1` allowlist already rejects them; this pins it) (S5).
+- [x] **R5.3** `run_test.exs` "public Kino.Qx entrypoint smoke (S6)" describe — drives public `Kino.Qx.run/3` + `run!/3` (qx.ex delegators) with ONLY the `_hardware_mod` seam (no `:on_status` → exercises default no-op callback path): ok-tuple, bare struct, RunError. Comment notes why true 2-arity can't carry the seam (S6).
+- [x] **R5.4** `mix format` + `mix compile --warnings-as-errors` clean; full `mix test` → 1 doctest, 65 tests, 0 failures, 4 excluded.
 
 ## Phase R6 — Cross-repo (X1)
 
-- [ ] **R6.1** File a bd issue in `qx/` (run from `../qx`, that repo's bd
-  DB): `type=bug`, label `discovered-from:kino-qx-circuit-pipeline`,
-  title "Qx.Hardware.Config leaks secrets via inspect/1 — add @derive
-  Inspect". Body: add
-  `@derive {Inspect, except: [:portal_token, :ibm_api_key, :ibm_crn,
-  :access_token]}` to `Qx.Hardware.Config`; note kino_qx ships
-  `safe_reason/1` as the local defence (R1) but the upstream `@derive` is
-  the root-cause fix. **Do not edit qx code from this branch** (workspace
-  rule: never edit two repos in one branch).
+- [x] **R6.1** Filed **`qx-o9h`** in `qx/`'s bd DB (run from `../qx`, `main`): `type=bug`, `P1`, labels `discovered-from:kino-qx-circuit-pipeline,security`, title "Qx.Hardware.Config leaks secrets via inspect/1 — add @derive Inspect". Body has Problem / Discovered-from / Fix (`@derive {Inspect, except: [...]}`) / Acceptance / cross-repo coordination. No qx code edited from this branch.
 
 ## Phase R7 — Verification + re-review
 
-- [ ] **R7.1** `mix compile --warnings-as-errors` — clean.
-- [ ] **R7.2** `mix format --check-formatted` — clean.
-- [ ] **R7.3** `mix test` — green; expect new total ≈ 55–60 (added
-  regression + interrupt + SSRF + public-arity tests).
-- [ ] **R7.4** `mix credo --strict` — 0 warnings.
-- [ ] **R7.5** Update `progress.md`: add a "Remediation" section; note B1
-  closed locally + X1 filed upstream.
-- [ ] **R7.6** Commit on `feat/credentials-cell`. Recommend a fresh
-  `/phx:review security` pass focused on `run.ex` + `exceptions.ex` to
-  confirm B1/W5 are truly closed before the branch is opened for PR.
+- [x] **R7.1** `mix compile --warnings-as-errors` — clean.
+- [x] **R7.2** `mix format --check-formatted` — clean.
+- [x] **R7.3** `mix test` — 1 doctest + 65 tests + 0 failures + 4 excluded (was 48; +regression/interrupt/region/SSRF/public-arity).
+- [x] **R7.4** `mix credo --strict` — **0 issues** (added aliases in qx.ex/exceptions.ex/run_test.exs; cleared the prior 2+ AliasUsage design suggestions).
+- [x] **R7.5** `progress.md` — "Remediation (2026-05-15)" section added with the R1–R7 table; notes B1 closed locally + X1 filed upstream as `qx-o9h`.
+- [ ] **R7.6** Commit on `feat/credentials-cell` — **deferred to user** (no auto-commit). Recommend a fresh `/phx:review security` on `run.ex` + `exceptions.ex` to confirm B1/W5 truly closed before PR.
 
 ## Risks & open questions
 

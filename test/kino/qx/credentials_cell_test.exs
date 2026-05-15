@@ -165,6 +165,38 @@ defmodule Kino.Qx.CredentialsCellTest do
     end
   end
 
+  describe "valid_ibm_region?/1 — region allowlist (W3)" do
+    # `handle_event("update_ibm_region", ...)` now branches on this
+    # predicate: an allowlisted value assigns the region; anything else
+    # routes to `set_error(ctx, "Invalid region.")` instead of raising a
+    # FunctionClauseError (Iron Law #8). handle_event/3 needs the live
+    # Kino runtime, so we assert the predicate that drives the branch.
+
+    test "accepts the allowlisted regions" do
+      assert CredentialsCell.valid_ibm_region?("us-south")
+      assert CredentialsCell.valid_ibm_region?("eu-de")
+    end
+
+    test "rejects non-allowlisted / malformed region values (error path, not crash)" do
+      for bad <- [
+            "us-east",
+            "eu-es",
+            "",
+            "US-SOUTH",
+            " us-south ",
+            "'; DROP TABLE",
+            "us-south ",
+            nil,
+            42,
+            %{},
+            :us_south
+          ] do
+        refute CredentialsCell.valid_ibm_region?(bad),
+               "expected #{inspect(bad)} to be rejected"
+      end
+    end
+  end
+
   describe "validate_portal_url/1 — SSRF defence" do
     test "accepts https://test.qxquantum.com (default)" do
       assert CredentialsCell.validate_portal_url("https://test.qxquantum.com") ==
@@ -213,6 +245,32 @@ defmodule Kino.Qx.CredentialsCellTest do
     test "rejects link-local IPv4 (cloud metadata service)" do
       assert CredentialsCell.validate_portal_url("http://169.254.169.254") == nil
       assert CredentialsCell.validate_portal_url("https://169.254.169.254") == nil
+    end
+
+    test "rejects IPv6 loopback (S5)" do
+      for url <- [
+            "http://[::1]",
+            "https://[::1]",
+            "http://[::1]:4000",
+            "https://[::1]:4000"
+          ] do
+        assert CredentialsCell.validate_portal_url(url) == nil,
+               "expected #{url} to be rejected"
+      end
+    end
+
+    test "rejects RFC-1918 private ranges (S5)" do
+      for url <- [
+            "http://10.0.0.1",
+            "https://10.0.0.1",
+            "http://192.168.1.1",
+            "https://192.168.1.1",
+            "http://172.16.0.1",
+            "https://172.16.0.1"
+          ] do
+        assert CredentialsCell.validate_portal_url(url) == nil,
+               "expected #{url} to be rejected"
+      end
     end
 
     test "rejects file://, data:, javascript: schemes" do
