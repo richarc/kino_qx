@@ -55,3 +55,17 @@
 
 - 22:48 WARN: requirements-verifier Write to reviews/ was sandbox-denied; orchestrator persisted reviews/requirements-remediation.md from agent message. X1 corrected UNCLEAR→MET (qx-o9h verified via bd show this session). 17 MET / 0 UNMET.
 - 22:49 WARN: security-analyzer Write to reviews/ sandbox-denied; orchestrator persisted reviews/security-remediation-review.md from agent message. Verdict PASS WITH WARNINGS — B1/W5 CLOSED, R2 SOUND, no BLOCKER.
+
+## 2026-05-15 — Phase 9 complete; PR open, awaiting human gate
+
+- qx published v0.7.0 → Hex `qx_sim 0.7.0`. Downstream dep bumped to
+  `{:qx, "~> 0.7", hex: :qx_sim}` — NOTE the `hex: :qx_sim` is required
+  (hex package name ≠ app name; bare `{:qx, "~> 0.7"}` won't resolve).
+- Branch `feat/credentials-cell` @ `d3b46d9`, pushed, in sync with origin.
+  Gates green: compile/format clean, 65 tests +1 doctest 0 failures,
+  credo 167 mods 0 issues.
+- **PR #1 open**: https://github.com/richarc/kino_qx/pull/1 — STOP here.
+  Human reviews + merges (workflow human gate; agent must not self-merge).
+- Remaining after merge (all USER STEPS): §8.4 portal_live, §8.5 ibm_live,
+  §8.7 dialyzer, §8.8 Livebook manual smoke, §9.4 `mix hex.publish` (kino_qx 0.2.0).
+- Upstream follow-up filed: `qx-o9h` (Config @derive Inspect hardening) in qx's bd.

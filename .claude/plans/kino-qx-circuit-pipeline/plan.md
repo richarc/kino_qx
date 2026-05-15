@@ -283,9 +283,9 @@ The existing `lib/kino/qx/transpile_cell.ex` (1001 lines) is **renamed and strip
 
 ### Phase 9 — Release prep (gated on qx 0.7.0 on Hex)
 
-- [ ] **9.1** Confirm `qx 0.7.0` is on Hex (`mix hex.info qx` or `https://hex.pm/packages/qx`).
-- [ ] **9.2** Switch `mix.exs` dep from `{:qx, path: "../qx"}` to `{:qx, "~> 0.7"}`. `mix deps.unlock --all && mix deps.get`. Re-run §8.1–8.3.
-- [ ] **9.3** Push branch; open PR via `/pr` (or manually). PR title: `feat: credentials cell + Kino.Qx.run! pipeline (0.2.0)`.
+- [x] **9.1** Confirmed `qx_sim 0.7.0` on Hex (published 2026-05-15, `richarc/qx` tag `v0.7.0`).
+- [x] **9.2** `mix.exs` dep switched to `{:qx, "~> 0.7", hex: :qx_sim}` (hex package is `qx_sim`, app `:qx`). `mix deps.get` → `qx_sim 0.7.0`; §8.1–8.3 re-run green (65 tests + 1 doctest, 0 failures; compile + format clean; credo 167 mods 0 issues). Committed `381d4a2`, pushed.
+- [x] **9.3** Branch pushed; **PR opened manually** (`/pr` retired) → https://github.com/richarc/kino_qx/pull/1 ("feat: credentials cell + Kino.Qx.run! pipeline (0.2.0)"). Awaiting **human review + merge** (workflow human gate — agent does not self-merge).
 - [ ] **9.4** Post-merge: `mix hex.publish` — **USER STEP**.
 
 ## Files touched
