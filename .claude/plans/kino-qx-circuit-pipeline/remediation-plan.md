@@ -80,7 +80,7 @@ untrappable — document that residual.
 - [x] **R7.3** `mix test` — 1 doctest + 65 tests + 0 failures + 4 excluded (was 48; +regression/interrupt/region/SSRF/public-arity).
 - [x] **R7.4** `mix credo --strict` — **0 issues** (added aliases in qx.ex/exceptions.ex/run_test.exs; cleared the prior 2+ AliasUsage design suggestions).
 - [x] **R7.5** `progress.md` — "Remediation (2026-05-15)" section added with the R1–R7 table; notes B1 closed locally + X1 filed upstream as `qx-o9h`.
-- [ ] **R7.6** Commit on `feat/credentials-cell` — **deferred to user** (no auto-commit). Recommend a fresh `/phx:review security` on `run.ex` + `exceptions.ex` to confirm B1/W5 truly closed before PR.
+- [x] **R7.6** Committed as `7c8373e` on `feat/credentials-cell` (user-approved). `/phx:review security` ran first → PASS WITH WARNINGS: B1/W5 CLOSED, R2 SOUND, 17/17 requirements MET, no BLOCKER (reviews/security-remediation-review.md). Not pushed.
 
 ## Risks & open questions
 
