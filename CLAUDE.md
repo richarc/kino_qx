@@ -3,10 +3,11 @@
 > **Workspace context.** This repo lives inside the [`qxquantum`](../CLAUDE.md)
 > multi-root workspace alongside [`qx/`](../qx/CLAUDE.md) (the core library)
 > and [`qxportal/`](../qxportal/CLAUDE.md) (the Phoenix web app). Each repo
-> is independent — its own git remote, branches, PRs, releases (Hex), and
-> CI. Cross-repo changes ship as separate PRs: land in `qx/` or `qxportal/`
-> first, then bump the dependency here. See `../CLAUDE.md` for the shared
-> development model.
+> is independent — its own git remote, branches, and releases (Hex). No
+> pull requests (one developer/reviewer). Cross-repo changes are
+> separate per-repo commits: land + publish upstream (`qx`/`qxportal`)
+> first, then flip the path dep → the published hex version here. See
+> `../CLAUDE.md` for the shared development model.
 >
 > **Stack:** Elixir library exposing two `Kino.SmartCell` components for
 > [Livebook](https://livebook.dev) — "Qx Snippet" and "Qx Credentials" —
@@ -62,9 +63,12 @@ mix test
 - `bd` (beads) is **deprecated** — do not create new `bd` issues or run `bd dolt push`; `.beads/` is retained read-only for later extraction
 - Track work in `.claude/plans/<slug>/plan.md`; record bugs / discovered work / tech debt in the active plan's `scratchpad.md` or `ROADMAP.md`
 - Do NOT use TodoWrite, TaskCreate, or markdown TODO lists for ongoing work
-- All work goes through `/phx:plan` → `/phx:work` → `/phx:verify` → `/phx:review`, then `gh pr create` → human review → `gh pr merge --squash --delete-branch` (the `/plan`, `/implement`, `/pr` commands are retired — use `/phx:*` + `gh pr`)
-- The `/phx:*` plugin is the only workflow; the Iron Laws in the Mandatory Procedures block below are non-negotiable
-- Cross-repo changes: ship upstream first, then bump the dep here in a separate PR
+- **No pull requests** (one human developer/reviewer). All work: `git checkout -b feat/<slug>` (or `fix/<slug>`) → `/phx:plan` → `/phx:work` → `/phx:verify` → `/phx:review`. The `/plan`, `/implement`, `/pr` commands are retired — `/phx:*` only.
+- **`/phx:review` is the merge gate** (replaces the PR review): code merges to `main` only after the verdict is PASS, or every finding is triaged (`/phx:triage`) and resolved. The human authorizes the merge; the agent runs the review, reports, and stops — it does not merge unreviewed work. Merge locally: `git merge --squash` + commit (tick the ROADMAP item in it), then `git push origin main`, `git branch -d`.
+- **Push is backup only** — push branches and `main` freely; pushing **never** publishes. Releases are deliberate and tag-gated only.
+- **Release** (only when a ROADMAP `## v0.X` section is fully checked): bump version + CHANGELOG; **flip `{:qx, path: "../qx"}` → `{:qx, "~> 0.7", hex: :qx_sim}` and re-run `/phx:verify`** (a path dep must never reach a published package); then `mix hex.publish` + tag `vX.Y.Z`. This is the single publish action.
+- The `/phx:*` plugin is the only workflow; the Iron Laws in the Mandatory Procedures block below are non-negotiable.
+- Cross-repo: ship upstream (`qx`/`qxportal`) first and publish it, then flip + bump the dep here (separate repo, separate commit).
 
 <!-- ELIXIR-PHOENIX-PLUGIN:START -->
 <!-- Tailored for kino_qx (pure Elixir library — Kino smart cells + HTTP; no Phoenix/Ecto/LiveView/Oban/Nx). Edit this block manually before re-running /phx:init --update or it will be overwritten with the full Phoenix-flavoured version. -->
