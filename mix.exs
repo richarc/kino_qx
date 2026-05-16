@@ -51,13 +51,10 @@ defmodule Kino.Qx.MixProject do
   end
 
   defp description do
-    """
-    Livebook Smart Cells for Qx. A "Qx Credentials" cell builds a
-    %Qx.Hardware.Config{} (tokens sourced from Livebook secrets, never
-    persisted), and Kino.Qx.run!/2 pipes a circuit through Qx.Hardware
-    onto real IBM Quantum hardware with a live status panel. Also
-    ships the "Qx Snippet" cell for browsing saved Qx Portal snippets.
-    """
+    "Livebook Smart Cells for Qx. A \"Qx Credentials\" cell builds a " <>
+      "%Qx.Hardware.Config{} from Livebook secrets; Kino.Qx.run!/2 pipes a " <>
+      "circuit onto real IBM Quantum hardware with a live status panel. " <>
+      "Also ships a \"Qx Snippet\" cell for saved Qx Portal snippets."
   end
 
   defp package do
