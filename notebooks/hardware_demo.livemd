@@ -4,7 +4,10 @@
 Mix.install([
   {:kino_qx, "~> 0.2"},
   # qx is published on Hex as the `qx_sim` package (app name `:qx`).
-  {:qx, "~> 0.7", hex: :qx_sim}
+  {:qx, "~> 0.7", hex: :qx_sim},
+  # Lets Livebook render the %VegaLite{} from Qx.Draw.plot_counts/2 as
+  # a bar chart. Without it the struct prints as raw text.
+  {:kino_vega_lite, "~> 0.1"}
 ])
 ```
 
