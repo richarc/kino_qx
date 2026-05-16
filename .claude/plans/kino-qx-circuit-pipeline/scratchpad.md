@@ -83,3 +83,52 @@
 - Remaining after merge (all USER STEPS): §8.4 portal_live, §8.5 ibm_live,
   §8.7 dialyzer, §8.8 Livebook manual smoke, §9.4 `mix hex.publish` (kino_qx 0.2.0).
 - Upstream follow-up filed: `qx-o9h` (Config @derive Inspect hardening) in qx's bd.
+
+## 2026-05-16 — Plan COMPLETE & shipped; manual check done. Deferred → kino_qx 0.2.1
+
+Released this cycle: qx **0.7.0** + **0.7.1** (connect/2 discovery fix +
+Config Inspect redaction / qx-o9h), kino_qx **0.2.0** (PR #1 merged).
+Manual Livebook visual check of `notebooks/hardware_demo.livemd`
+performed and **working end-to-end on real IBM hardware**.
+
+The connect failure hit during the manual check was an **environment
+issue, not a code bug**: portal returned `{:portal, :unauthorized}`
+(401) because the `LB_PORTAL_TOKEN` didn't match the portal being hit
+(token/portal-instance mismatch). Resolved by the user; no code change.
+
+bd is deprecated → recording these here per the workflow (discovered
+work → scratchpad). **Batch into a single kino_qx 0.2.1 — do NOT
+release per-bug.** Verify with the path-dep posture (notebook
+`Mix.install` → `{:kino_qx, path: ".."}`) before publishing.
+
+1. **Error masking (significant UX bug, blocks debugging).**
+   `Kino.Qx.Run.SafeReason.describe/1` AND `credentials_cell.ex`
+   `connect_error_message/1` + `redact_reason/1` only match **bare**
+   error atoms/tuples (`:unauthorized`, `{:network,_}`, `{:http,_,_}`).
+   `Qx.Hardware` ALWAYS wraps errors as `{stage, reason}` (e.g.
+   `{:portal, :unauthorized}`, `{:config, %Qx.Hardware.ConfigError{}}`).
+   None of the bare clauses match the stage-wrapped envelope, so every
+   real failure collapses to "unexpected error" — made a 401 and a
+   "you didn't pick a backend" both undebuggable.
+   Fix: decompose `{stage, reason}` first (recurse on `reason`,
+   prefix with `stage`), and surface typed
+   `Qx.Hardware.{ConfigError,NoMeasurementsError}` `.message`
+   (safe — no credential fields). Correct copy often already exists
+   (e.g. the `:unauthorized` clause) but is unreachable. Same defect
+   in two modules — fix both, keep `%Config{}` redaction + the
+   unknown-shape → fixed-string guard intact (security contract).
+   Add regression tests for the stage-wrapped shapes.
+
+2. **Notebook bad default.** `notebooks/hardware_demo.livemd` ships
+   `portal_base_url: "https://localhost:4000"` (https + localhost
+   never works against a normal dev server; misleads local testers).
+   Default to the hosted portal (`https://test.qxquantum.com`) or
+   document the `http://localhost:PORT` requirement inline.
+
+3. (Minor) Demo `Mix.install` pin: `~> 0.7` vs `~> 0.7.1` — either is
+   fine; `~> 0.7.1` guarantees the connect fix. Decide when doing #2.
+
+NOT to be committed: any local working-session state in
+`hardware_demo.livemd` (baked-in `http://localhost:4000` / `ibm_fez` /
+generated `%Config{}` block / Livebook stamp). Canonical demo keeps an
+empty smart cell (`attrs: "e30"`). Revert/stash local notebook edits.
