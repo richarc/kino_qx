@@ -9,6 +9,82 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
+### Changed
+
+- **Interrupt contract is now real.** On Livebook's trappable "Stop"
+  (`:shutdown`), `Kino.Qx.run/2,3` / `run!/2,3` now traps the exit,
+  runs the in-flight `Qx.Hardware.cancel/3` exactly once, and
+  **raises `Kino.Qx.Interrupted`** (with the last-seen `job_id`).
+  Previously the exception type existed but was never raised — the
+  caller just died and only the watcher cancelled. The unlinked
+  watcher is retained solely as the `:kill` (untrappable) safety net.
+
+### Security
+
+- `Qx.Hardware.Config` (which holds the portal token, IBM API key,
+  IBM CRN, and IAM access token) is no longer reachable by
+  `inspect/1` in any error/status path. A new `Kino.Qx.SafeReason`
+  redacts an embedded `%Config{}` at any common nesting depth and
+  collapses unknown reasons to a fixed string instead of inspecting
+  them. The cancel watcher's `Qx.Hardware.cancel/3` is wrapped so a
+  raised error can no longer crash-dump the closure env (tokens) to
+  the Livebook log. (Upstream root-cause fix — `@derive Inspect` on
+  `Qx.Hardware.Config` — tracked as a `qx` bug.)
+
+## [0.2.0] - 2026-05-14
+
+**Breaking architectural reset.** A previously-drafted 0.2.0 design
+(all-in-one TranspileCell with embedded QASM + Submit button) never
+reached Hex. This release replaces it with a credentials Smart Cell +
+a `Kino.Qx.run!/2` pipeline function. The transpile / submit / poll /
+result-build core moved upstream into `Qx.Hardware` in the `:qx`
+library (0.7.0); `kino_qx` is now a thin UX layer.
+
+### Added
+
+- **`Kino.Qx.CredentialsCell`** — new Smart Cell registered as **"Qx Credentials"**. Collects portal URL, region, backend, optimization level, and shots; emits a `qx = %Qx.Hardware.Config{...}` binding for downstream cells. Tokens come from Livebook secrets (`LB_PORTAL_TOKEN`, `LB_IBM_API_KEY`, `LB_IBM_CRN`) — never asked for in the cell UI, never present in cell state, never written to the `.livemd`.
+- **`Kino.Qx.run/2,3`** and **`Kino.Qx.run!/2,3`** — pipeline functions that wrap `Qx.Hardware.run/3` with a live `Kino.Frame` status panel (✔ / ⏳ icons, queue position, elapsed seconds) and a best-effort cancel watcher. The watcher is an unlinked process that monitors the caller; if Livebook's "Stop" button fires during a run, the watcher calls `Qx.Hardware.cancel/3` for the in-flight IBM job.
+- **`Kino.Qx.RunError`** — raised by `run!/2,3` when `Qx.Hardware.run/3` returns `{:error, _}`. Carries the original reason; `Exception.message/1` describes it humanly.
+- **`Kino.Qx.Interrupted`** — exception type for caller interruption during a run; includes the job_id when known. (Wired to actually raise in [Unreleased] — see above.)
+- Required dep on `{:qx, "~> 0.7"}`.
+
+### Removed (BREAKING)
+
+- `Kino.Qx.TranspileCell` — superseded by `Kino.Qx.CredentialsCell` + `Kino.Qx.run!/2`.
+- `Kino.Qx.IbmClient` — moved upstream to `Qx.Hardware.Ibm`.
+- `Kino.Qx.TranspilePipeline` — absorbed into `Qx.Hardware.run/3`.
+- `Kino.Qx.Client.transpile/2` — moved upstream to `Qx.Hardware.Portal.transpile/3`. `Kino.Qx.Client` is now snippet-only (`/me`, `/snippets`, `/snippets/:id`) and serves the existing `Kino.Qx.SmartCell`.
+- Inline `Kino.DataTable` / `Kino.VegaLite` rendering inside the cell. Use `Qx.Draw.plot_counts/2` at the end of the `run!` pipeline instead.
+
+### Privacy invariant
+
+- Tokens are not held in cell state. `to_source/1` emits `System.fetch_env!("LB_PORTAL_TOKEN")` (and equivalents) as references, never string literals. The `.livemd` carries no secret bytes.
+
+### Notes
+
+- `kino` dependency stays at `~> 0.19` (latest on Hex; no Smart Cell API churn since 0.1.0).
+- Non-Livebook callers (CLI / Phoenix / OTP) can use `Qx.Hardware.run/3` directly from `:qx` with no `:kino` dep.
+
+## [0.2.0-pre] (unpublished — superseded)
+
+### Added
+
+- `Kino.Qx.TranspileCell` — second Smart Cell registered as **"Qx Transpile + Submit"**. Takes an OpenQASM 3.0 circuit, asks the Qx Portal to transpile it for a chosen IBM Quantum backend, then submits the transpiled circuit to IBM Quantum directly and renders the result counts inline as a `Kino.DataTable` (with optional `Kino.VegaLite` histogram if available).
+- `Kino.Qx.IbmClient` — Req-based wrapper for IBM Cloud IAM + the Qiskit Runtime REST API. Covers `iam_exchange/1`, `list_backends/1`, `fetch_backend_properties/2`, `submit_sampler/4` (3-element PUB `[qasm, nil, shots]`, no session), `poll_job/2` (Pascal-Case status enum: `"Queued"`, `"Running"`, `"Completed"`, `"Cancelled"`, `"Cancelled - Ran too long"`, `"Failed"`), `fetch_results/2`, `cancel_job/2` (`POST /jobs/:id/cancel`). 401-refresh-retry-once via `with_iam_refresh/2`. Sampler primitive only (Estimator deferred). Wire format verified against `qx_server` (production-proven against real IBM hardware) and IBM's published spec.
+- `Kino.Qx.Client.transpile/2` — POST `/api/v1/transpile` with the qxportal contract. Maps 422 → `:invalid_qasm`, 502 → `:transpile_failed`, 503 → `:transpile_unavailable`, 504 → `:transpile_timeout`. Adds `:qasm`, `:metadata`, `:depth`, `:size`, `:num_qubits` to the response-key allowlist.
+- `Kino.Qx.TranspilePipeline` — testable orchestrator (no Kino runtime needed). Sequences IAM auth → backend properties → portal transpile → submit → poll-with-backoff (1s/2s/4s capped at 30s, hard timeout 24h configurable) → fetch results. Emits `{:ibm, :job_started, job_id}` so the cell can track the job for cancel. `on_status` callback for live UI updates. Errors normalised to `{:error, stage, reason}` for stage-routed messaging.
+- Live integration tests tagged `:ibm_live` and `:portal_live`, excluded from default `mix test`. Run locally before each Hex publish.
+- SSRF defence on `portal_base_url`: persisted URLs validated against an allowlist (`*.qxquantum.com` over https; `localhost`/`127.0.0.1` over http for dev). Blocks malicious shared-notebook URL redirection.
+- Error UI uses a `redact_reason/1` collapser so HTTP 4xx bodies (which can echo the IAM apikey) never reach the cell error panel.
+
+### Privacy invariant
+
+- Three independent secrets (qxportal token, IBM API key, IBM Service-CRN) live ONLY in transient cell state. None are written to `to_attrs/1`. Notebook circuits (`qasm_paste`) are persisted only when the user opts in via a "save with notebook" checkbox (default OFF).
+
+### Notes
+
+- `kino` dependency stays at `~> 0.19` (latest on Hex; no Smart Cell API churn since 0.1.0).
+
 ## [0.1.0] - 2026-05-03
 
 ### Added
@@ -34,5 +110,6 @@ is a **minor** bump on this package until v1.0.
   - Default portal URL `https://qxportal.dev`.
   - Minimum Elixir `~> 1.17`.
 
-[Unreleased]: https://github.com/richarc/kino_qx/compare/v0.1.0..HEAD
+[Unreleased]: https://github.com/richarc/kino_qx/compare/v0.2.0..HEAD
+[0.2.0]: https://github.com/richarc/kino_qx/releases/tag/v0.2.0
 [0.1.0]: https://github.com/richarc/kino_qx/releases/tag/v0.1.0

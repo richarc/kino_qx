@@ -1,0 +1,45 @@
+=== mix compile --warnings-as-errors ===
+
+=== mix format --check-formatted ===
+exit=0
+
+=== mix test ===
+Compiling 1 file (.ex)
+Generated kino_qx app
+Running ExUnit with seed: 480856, max_cases: 16
+
+..............................................................
+Finished in 0.1 seconds (0.1s async, 0.00s sync)
+1 doctest, 61 tests, 0 failures
+
+=== mix credo --strict ===
+Checking 15 source files ...
+
+  Software Design                                                               
+┃ 
+┃ [D] ↘ Nested modules could be aliased at the top of the invoking module.
+┃       lib/kino/qx/transpile_cell.ex:374:29 #(Kino.Qx.TranspileCell.do_connect)
+┃ [D] ↘ Nested modules could be aliased at the top of the invoking module.
+┃       lib/kino/qx/transpile_cell.ex:373:28 #(Kino.Qx.TranspileCell.do_connect)
+┃ [D] ↘ Nested modules could be aliased at the top of the invoking module.
+┃       lib/kino/qx/transpile_cell.ex:372:29 #(Kino.Qx.TranspileCell.do_connect)
+
+  Refactoring opportunities                                                     
+┃ 
+┃ [F] → Function body is nested too deep (max depth is 2, was 3).
+┃       lib/kino/qx/transpile_pipeline.ex:155:11 #(Kino.Qx.TranspilePipeline.do_poll)
+┃ [F] → Cond statements should contain at least two conditions besides `true`, 
+┃       consider using `if` instead.
+┃       lib/kino/qx/ibm_client.ex:389:7 #(Kino.Qx.IbmClient.authed_request)
+┃ [F] → Function body is nested too deep (max depth is 2, was 3).
+┃       lib/kino/qx/ibm_client.ex:283:11 #(Kino.Qx.IbmClient.poll_job)
+
+Please report incorrect results: https://github.com/rrrene/credo/issues
+
+Analysis took 0.1 seconds (0.02s to load, 0.08s running 69 checks on 15 files)
+171 mods/funs, found 3 refactoring opportunities, 3 software design suggestions.
+
+Use `mix credo explain` to explain issues, `mix credo --help` for options.
+
+=== dialyzer plt check ===
+(eval):15: no matches found: _build/dev/dialyxir_*.plt

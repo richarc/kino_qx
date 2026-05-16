@@ -1,7 +1,7 @@
 defmodule Kino.Qx.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/richarc/kino_qx"
 
   def project do
@@ -34,6 +34,10 @@ defmodule Kino.Qx.MixProject do
     [
       # Runtime
       {:kino, "~> 0.19"},
+      # qx is published on Hex as the `qx_sim` package (app name `:qx`).
+      # `~> 0.7` resolves to 0.7.1, which carries the connect/2 discovery
+      # fix + Config Inspect redaction this cell depends on (plan §9.2).
+      {:qx, "~> 0.7", hex: :qx_sim},
       {:req, "~> 0.5"},
       # Jason arrives transitively via Kino, but pin explicitly so the
       # smart cell's encode/decode behaviour can't drift if Kino
@@ -48,8 +52,11 @@ defmodule Kino.Qx.MixProject do
 
   defp description do
     """
-    A Livebook Smart Cell for the Qx Portal. Browse and inject your saved
-    OpenQASM / Elixir snippets into a notebook from the cell's dropdown.
+    Livebook Smart Cells for Qx. A "Qx Credentials" cell builds a
+    %Qx.Hardware.Config{} (tokens sourced from Livebook secrets, never
+    persisted), and Kino.Qx.run!/2 pipes a circuit through Qx.Hardware
+    onto real IBM Quantum hardware with a live status panel. Also
+    ships the "Qx Snippet" cell for browsing saved Qx Portal snippets.
     """
   end
 
