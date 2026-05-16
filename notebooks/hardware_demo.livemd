@@ -3,7 +3,8 @@
 ```elixir
 Mix.install([
   {:kino_qx, "~> 0.2"},
-  {:qx, "~> 0.7"}
+  # qx is published on Hex as the `qx_sim` package (app name `:qx`).
+  {:qx, "~> 0.7", hex: :qx_sim}
 ])
 ```
 
