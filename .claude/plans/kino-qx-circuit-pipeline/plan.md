@@ -284,9 +284,9 @@ The existing `lib/kino/qx/transpile_cell.ex` (1001 lines) is **renamed and strip
 ### Phase 9 — Release prep (gated on qx 0.7.0 on Hex)
 
 - [x] **9.1** Confirmed `qx_sim 0.7.0` on Hex (published 2026-05-15, `richarc/qx` tag `v0.7.0`).
-- [ ] **9.2** Switch `mix.exs` dep to `{:qx, "~> 0.7", hex: :qx_sim}` at the publish gate (hex package is `qx_sim`, app `:qx`). **Re-deferred** 2026-05-16: was done prematurely as `381d4a2` (Hex dep), but `ibm_live` debugging found an upstream `connect/2` bug. Reverted to `{:qx, path: "../qx"}` for the debug cycle — do this switch only once integration testing is complete and qx 0.7.1 is published.
-- [x] **9.3** Branch pushed; **PR opened** → https://github.com/richarc/kino_qx/pull/1. NOTE: PR is **not mergeable as-is** — it must not ship the path dep; the §9.2 Hex switch + a green `ibm_live` are merge prerequisites.
-- [ ] **9.4** Post-merge: `mix hex.publish` — **USER STEP**.
+- [x] **9.2** `mix.exs` switched to `{:qx, "~> 0.7", hex: :qx_sim}` 2026-05-16 after qx **0.7.1** published (carries the `connect/2` discovery fix + `Config` Inspect redaction found during `ibm_live`/`ibm_submit` debugging). `mix deps.get` → `qx_sim 0.7.1`; gates green (65 tests + 1 doctest, 0 failures; compile/format/credo clean). End-to-end real-hardware submit confirmed passing on the path-linked branch before the flip.
+- [x] **9.3** Branch `feat/credentials-cell` pushed; **PR #1** → https://github.com/richarc/kino_qx/pull/1. Now **mergeable**: path dep removed, qx pinned to published `qx_sim 0.7.1`, full + live suites green.
+- [ ] **9.4** Post-merge: publish kino_qx 0.2.0 — **USER STEP**.
 
 ## Files touched
 

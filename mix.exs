@@ -34,10 +34,10 @@ defmodule Kino.Qx.MixProject do
     [
       # Runtime
       {:kino, "~> 0.19"},
-      # Dev/debug posture: path dep so upstream qx fixes are picked up
-      # immediately without a Hex release per bug. Switched to
-      # {:qx, "~> 0.7", hex: :qx_sim} at the publish gate (plan §9.2).
-      {:qx, path: "../qx"},
+      # qx is published on Hex as the `qx_sim` package (app name `:qx`).
+      # `~> 0.7` resolves to 0.7.1, which carries the connect/2 discovery
+      # fix + Config Inspect redaction this cell depends on (plan §9.2).
+      {:qx, "~> 0.7", hex: :qx_sim},
       {:req, "~> 0.5"},
       # Jason arrives transitively via Kino, but pin explicitly so the
       # smart cell's encode/decode behaviour can't drift if Kino
