@@ -6,6 +6,20 @@
   Switch to `{:qx, "~> 0.7"}` at Phase 9.2 (after qx 0.7.0 is on Hex).
   Recorded per plan §Phase 0.3.
 
+- **2026-05-16** — §9.2 was front-loaded prematurely (`381d4a2` switched
+  to `{:qx, "~> 0.7", hex: :qx_sim}` and PR #1 opened). Then
+  `mix test --include ibm_live` exposed an **upstream `Qx.Hardware.connect/2`
+  bug**: it rejects a blank `backend`, but the CredentialsCell (and the
+  live test) must call connect with no backend yet to discover the
+  backends list — so first-time "Connect" is broken for every user.
+  **Decision (user):** do NOT cut a qx release per debugging bug.
+  Reverted kino_qx to `{:qx, path: "../qx"}` so local qx fixes are
+  picked up immediately; iterate freely against the path-linked qx;
+  cut a single **qx 0.7.1** (batching this `connect/2` fix + the
+  already-filed `qx-o9h` Inspect-redaction) only when integration
+  testing is complete and confident. §9.2 (Hex switch) is the LAST
+  step before publish, not before debugging is done.
+
 - **2026-05-14 (Phase 3 mid-flight)** — Credentials cell **does NOT collect
   tokens in its UI**. The plan's literal sketch ("emits qx struct with
   transient tokens inline") is a privacy leak: Livebook persists the
