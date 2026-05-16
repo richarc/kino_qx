@@ -285,8 +285,8 @@ The existing `lib/kino/qx/transpile_cell.ex` (1001 lines) is **renamed and strip
 
 - [x] **9.1** Confirmed `qx_sim 0.7.0` on Hex (published 2026-05-15, `richarc/qx` tag `v0.7.0`).
 - [x] **9.2** `mix.exs` switched to `{:qx, "~> 0.7", hex: :qx_sim}` 2026-05-16 after qx **0.7.1** published (carries the `connect/2` discovery fix + `Config` Inspect redaction found during `ibm_live`/`ibm_submit` debugging). `mix deps.get` → `qx_sim 0.7.1`; gates green (65 tests + 1 doctest, 0 failures; compile/format/credo clean). End-to-end real-hardware submit confirmed passing on the path-linked branch before the flip.
-- [x] **9.3** Branch `feat/credentials-cell` pushed; **PR #1** → https://github.com/richarc/kino_qx/pull/1. Now **mergeable**: path dep removed, qx pinned to published `qx_sim 0.7.1`, full + live suites green.
-- [ ] **9.4** Post-merge: publish kino_qx 0.2.0 — **USER STEP**.
+- [x] **9.3** **PR #1 merged** (`61a7160`) → kino_qx `main`. Path dep removed, qx pinned to published `qx_sim 0.7.1`, full + live suites green.
+- [x] **9.4** **kino_qx 0.2.0 published** 2026-05-16 — https://hex.pm/packages/kino_qx/0.2.0 + https://hexdocs.pm/kino_qx/0.2.0; tag `v0.2.0` + GitHub release. CHANGELOG finalized (Unreleased folded into [0.2.0], dated 2026-05-16); mix.exs description trimmed under Hex's 300-char cap (one blocked publish attempt, nothing leaked). Plan COMPLETE.
 
 ## Files touched
 
