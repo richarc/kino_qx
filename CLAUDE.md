@@ -18,10 +18,16 @@
 > the same plugin is used despite this not being a Phoenix app; only the
 > non-web `/phx:*` commands apply (no LiveView, no Ecto, no Oban).
 >
-> Issues are tracked in `bd` for **bugs and deferred work only** — features
-> live in `.claude/plans/<slug>/plan.md`, not in `bd`.
+> **`bd` (beads) is deprecated.** The existing `.beads/` database is
+> retained for later extraction; do not create new `bd` issues, run
+> `bd dolt push`, or rely on `bd` for tracking. All work — features
+> and bug fixes alike — lives in `.claude/plans/<slug>/plan.md`.
 
-For the "what goes where" matrix (features → plan file, bugs/discovered/tech-debt → bd), see [`../CLAUDE.md`](../CLAUDE.md#2-beads-bd--bugs-and-deferred-work-only). A "new smart cell" counts as a feature and goes through `/plan`.
+All work is plan-file driven (see [`../CLAUDE.md`](../CLAUDE.md) §2 for
+the workspace-wide rule). A "new smart cell" counts as a feature and
+goes through `/plan` → `/phx:plan`; bugs and discovered work are noted
+in the active plan's `scratchpad.md` or `ROADMAP.md` and addressed on a
+`feat/<slug>` or `fix/<slug>` branch via the normal `/phx:*` workflow.
 
 ## Project-specific notes
 
@@ -41,10 +47,6 @@ For the "what goes where" matrix (features → plan file, bugs/discovered/tech-d
 ## Quick reference
 
 ```bash
-bd ready              # Find available bug / task work
-bd show <id>          # View issue details
-bd close <id>         # Complete work
-
 mix compile --warnings-as-errors
 mix format --check-formatted
 mix test
@@ -52,7 +54,8 @@ mix test
 
 ## Rules
 
-- Use `bd` for **bugs, deferred items, and discovered work** — NOT for feature planning
+- `bd` (beads) is **deprecated** — do not create new `bd` issues or run `bd dolt push`; `.beads/` is retained read-only for later extraction
+- Track work in `.claude/plans/<slug>/plan.md`; record bugs / discovered work / tech debt in the active plan's `scratchpad.md` or `ROADMAP.md`
 - Do NOT use TodoWrite, TaskCreate, or markdown TODO lists for ongoing work
-- Features go through `/plan` → `/phx:work` → `/phx:verify` → `/phx:review` → `/pr`
+- All work goes through `/plan` → `/phx:plan` → `/phx:work` → `/phx:verify` → `/phx:review`, then `gh pr create` → human review → `gh pr merge --squash --delete-branch` (the `/pr` command is retired)
 - Cross-repo changes: ship upstream first, then bump the dep here in a separate PR
