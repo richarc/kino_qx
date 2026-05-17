@@ -96,17 +96,17 @@ defmodule Kino.Qx.CredentialsCellTest do
     end
   end
 
-  describe "to_source/1 — privacy invariant" do
-    test "emits %Qx.Hardware.Config{} with the expected attrs" do
-      attrs = %{
-        "portal_base_url" => "https://test.qxquantum.com",
-        "ibm_region" => "us-south",
-        "last_backend_name" => "ibm_brisbane",
-        "optimization_level" => 2,
-        "shots" => 4096
-      }
+  describe "to_source/1 — backend-set branch (struct + privacy invariant)" do
+    @backend_attrs %{
+      "portal_base_url" => "https://test.qxquantum.com",
+      "ibm_region" => "us-south",
+      "last_backend_name" => "ibm_brisbane",
+      "optimization_level" => 2,
+      "shots" => 4096
+    }
 
-      out = CredentialsCell.to_source(attrs)
+    test "emits %Qx.Hardware.Config{} with the expected attrs (no raise)" do
+      out = CredentialsCell.to_source(@backend_attrs)
 
       assert out =~ "qx = %Qx.Hardware.Config{"
       assert out =~ ~s|portal_url: "https://test.qxquantum.com"|
@@ -114,18 +114,26 @@ defmodule Kino.Qx.CredentialsCellTest do
       assert out =~ ~s|backend: "ibm_brisbane"|
       assert out =~ "optimization_level: 2"
       assert out =~ "shots: 4096"
+      refute out =~ "raise"
+    end
+
+    test "falls back to safe defaults for non-backend fields when sparse" do
+      # Rewritten from "falls back to safe defaults when attrs are
+      # sparse" — user-approved 2026-05-17. Under D2 a sparse map has a
+      # blank backend and now raises, so the default-fallback contract
+      # is asserted against the backend-set (struct) branch instead.
+      out = CredentialsCell.to_source(%{"last_backend_name" => "ibm_brisbane"})
+
+      assert out =~ "qx = %Qx.Hardware.Config{"
+      assert out =~ ~s|portal_url: "https://test.qxquantum.com"|
+      assert out =~ ~s|ibm_region: "us-south"|
+      assert out =~ ~s|backend: "ibm_brisbane"|
+      assert out =~ "optimization_level: 1"
+      assert out =~ "shots: 4096"
     end
 
     test "tokens are emitted as System.fetch_env! references, not literals" do
-      attrs = %{
-        "portal_base_url" => "https://test.qxquantum.com",
-        "ibm_region" => "us-south",
-        "last_backend_name" => "ibm_brisbane",
-        "optimization_level" => 1,
-        "shots" => 4096
-      }
-
-      out = CredentialsCell.to_source(attrs)
+      out = CredentialsCell.to_source(@backend_attrs)
 
       assert out =~ ~s|portal_token: System.fetch_env!("LB_PORTAL_TOKEN")|
       assert out =~ ~s|ibm_api_key: System.fetch_env!("LB_IBM_API_KEY")|
@@ -135,17 +143,13 @@ defmodule Kino.Qx.CredentialsCellTest do
     test "no token literal could possibly appear (sentinel scan)" do
       # Even if attrs were somehow polluted with token-shaped values, the
       # cell pulls from System.fetch_env! — not from attrs.
-      attrs = %{
-        "portal_base_url" => "https://test.qxquantum.com",
-        "ibm_region" => "us-south",
-        "last_backend_name" => "ibm_brisbane",
-        "optimization_level" => 1,
-        "shots" => 4096,
-        # The cell IGNORES these keys; they must not leak even if present.
-        "portal_token" => "qx_live_SHOULDNT_LEAK",
-        "ibm_api_key" => "API_KEY_SHOULDNT_LEAK",
-        "ibm_crn" => "CRN_SHOULDNT_LEAK"
-      }
+      attrs =
+        Map.merge(@backend_attrs, %{
+          # The cell IGNORES these keys; they must not leak even if present.
+          "portal_token" => "qx_live_SHOULDNT_LEAK",
+          "ibm_api_key" => "API_KEY_SHOULDNT_LEAK",
+          "ibm_crn" => "CRN_SHOULDNT_LEAK"
+        })
 
       out = CredentialsCell.to_source(attrs)
 
@@ -153,15 +157,149 @@ defmodule Kino.Qx.CredentialsCellTest do
       refute out =~ "API_KEY_SHOULDNT_LEAK"
       refute out =~ "CRN_SHOULDNT_LEAK"
     end
+  end
 
-    test "falls back to safe defaults when attrs are sparse" do
+  describe "to_source/1 — blank-backend guard (D2)" do
+    test "blank/invalid last_backend_name emits a raising guard, no Config struct" do
+      for attrs <- [
+            %{},
+            %{"last_backend_name" => ""},
+            %{"last_backend_name" => "   "},
+            %{"last_backend_name" => nil},
+            # non-binary values must also route to the guard
+            # (backend_chosen?/1 catch-all → false)
+            %{"last_backend_name" => 42},
+            %{"last_backend_name" => :ibm_brisbane},
+            %{"last_backend_name" => []}
+          ] do
+        out = CredentialsCell.to_source(attrs)
+
+        assert out =~ "raise", "expected a raising guard for #{inspect(attrs)}"
+
+        assert out =~ "select a backend",
+               "guard message must be actionable for #{inspect(attrs)}"
+
+        refute out =~ "%Qx.Hardware.Config{",
+               "blank backend must NOT emit a Config struct: #{out}"
+      end
+    end
+
+    test "the guard branch leaks no token literal nor fetch_env ref" do
+      for attrs <- [%{}, %{"last_backend_name" => ""}, %{"last_backend_name" => nil}] do
+        out = CredentialsCell.to_source(attrs)
+
+        refute out =~ "qx_live_", "token literal leaked for #{inspect(attrs)}"
+        refute out =~ "System.fetch_env!", "fetch_env leaked for #{inspect(attrs)}"
+      end
+    end
+
+    test "emitted guard code is valid Elixir that raises when evaluated" do
       out = CredentialsCell.to_source(%{})
 
-      assert out =~ ~s|portal_url: "https://test.qxquantum.com"|
-      assert out =~ ~s|ibm_region: "us-south"|
-      assert out =~ ~s|backend: ""|
+      assert_raise RuntimeError, ~r/select a backend/, fn ->
+        Code.eval_string(out)
+      end
+    end
+  end
+
+  describe "reevaluate_on_change wiring (P1-T3)" do
+    # The option `use Kino.SmartCell, reevaluate_on_change: true` is not
+    # cleanly introspectable without booting the Kino runtime (it lives
+    # in compile-time `@smart_opts`; `__smart_definition__/0` exposes
+    # only kind/module/name). Per the scratchpad-resolved decision we
+    # assert the behavioural premise the option keys off — `to_source/1`
+    # changes when a persisted attr changes — and cover the live rebind
+    # in the P4-T2 manual smoke.
+
+    test "picking a backend changes to_source output (guard -> struct)" do
+      blank = CredentialsCell.to_source(%{})
+      chosen = CredentialsCell.to_source(%{"last_backend_name" => "ibm_brisbane"})
+
+      refute blank == chosen
+      assert blank =~ "raise"
+      assert chosen =~ "%Qx.Hardware.Config{"
+    end
+
+    test "changing shots changes to_source output" do
+      a = CredentialsCell.to_source(%{"last_backend_name" => "ibm_brisbane", "shots" => 1024})
+      b = CredentialsCell.to_source(%{"last_backend_name" => "ibm_brisbane", "shots" => 4096})
+
+      refute a == b
+      # both must be the struct branch — a difference that was actually
+      # the guard firing on one side would be a false positive
+      assert a =~ "%Qx.Hardware.Config{"
+      assert b =~ "%Qx.Hardware.Config{"
+      assert a =~ "shots: 1024"
+      assert b =~ "shots: 4096"
+    end
+  end
+
+  describe "to_source/1 — emitted-source safety (WARNING-1/2)" do
+    test "non-integer optimization_level / shots cannot inject into emitted source" do
+      attrs = %{
+        "last_backend_name" => "ibm_brisbane",
+        "optimization_level" => "1\n  System.halt()",
+        "shots" => ~s|4096); File.rm_rf!("/")|
+      }
+
+      out = CredentialsCell.to_source(attrs)
+
+      refute out =~ "System.halt"
+      refute out =~ "File.rm_rf"
+      # malformed values are rejected → documented safe defaults
       assert out =~ "optimization_level: 1"
       assert out =~ "shots: 4096"
+      assert {:ok, _ast} = Code.string_to_quoted(out)
+    end
+
+    test "in-range integer-ish strings still round-trip" do
+      out =
+        CredentialsCell.to_source(%{
+          "last_backend_name" => "ibm_brisbane",
+          "optimization_level" => "2",
+          "shots" => "1024"
+        })
+
+      assert out =~ "optimization_level: 2"
+      assert out =~ "shots: 1024"
+    end
+
+    test "the struct branch emits syntactically valid Elixir" do
+      out =
+        CredentialsCell.to_source(%{
+          "portal_base_url" => "https://test.qxquantum.com",
+          "ibm_region" => "us-south",
+          "last_backend_name" => "ibm_brisbane",
+          "optimization_level" => 2,
+          "shots" => 4096
+        })
+
+      assert {:ok, _ast} = Code.string_to_quoted(out)
+    end
+  end
+
+  describe "cell_step/2 — guided-sequence state (P2)" do
+    # Drives the JS guided sequence: which step the user should act on
+    # and whether the cell is `ready` (connected AND a backend chosen,
+    # i.e. `to_source/1` will emit the struct, not the raising guard).
+    # `@doc false` + public for unit testing without the Kino runtime
+    # (same convention as `valid_ibm_region?/1`).
+
+    test "not connected → step 2, not ready (even with a remembered backend)" do
+      assert CredentialsCell.cell_step(false, "") == %{step: 2, ready: false}
+      assert CredentialsCell.cell_step(false, "ibm_brisbane") == %{step: 2, ready: false}
+      assert CredentialsCell.cell_step(nil, "ibm_brisbane") == %{step: 2, ready: false}
+    end
+
+    test "connected but no backend chosen → step 3, not ready" do
+      for backend <- ["", "   ", nil, 42] do
+        assert CredentialsCell.cell_step(true, backend) == %{step: 3, ready: false},
+               "expected not-ready for backend #{inspect(backend)}"
+      end
+    end
+
+    test "connected with a backend chosen → step 3, ready" do
+      assert CredentialsCell.cell_step(true, "ibm_brisbane") == %{step: 3, ready: true}
     end
   end
 

@@ -9,6 +9,35 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
+### Changed
+
+- **`Kino.Qx.CredentialsCell` now reevaluates on change and rebinds
+  `qx` automatically.** The cell is registered with
+  `reevaluate_on_change: true`, so changing any persisted field
+  (portal URL, region, **backend**, optimization level, shots)
+  re-runs the cell and rebinds the notebook `qx` binding. Previously,
+  picking a backend after Connect updated the generated code text but
+  did **not** rebind `qx` until the user manually re-ran the cell —
+  a downstream `Kino.Qx.run!/2` would use a stale config. **Visible
+  behaviour change:** editing a field now auto-re-runs the cell (on
+  blur/commit, not per keystroke).
+- **The Smart Cell is now a guided 3-step sequence** — (1) Livebook
+  secrets, (2) Portal & region + Connect, (3) Job defaults. Step 3 is
+  locked until Connect succeeds and shows a "pick a backend to finish"
+  affordance until a backend is chosen. Pushed events, the
+  `__remembered__` saved-backend handling, and the privacy invariant
+  (tokens never in cell state / `.livemd`) are unchanged.
+
+### Fixed
+
+- **An unconfigured cell no longer silently emits a broken config.**
+  With no backend chosen, `to_source/1` previously emitted
+  `%Qx.Hardware.Config{… backend: "" …}`, which failed downstream with
+  no actionable message. It now emits a `raise` with a clear
+  instruction ("select a backend …"). Combined with
+  `reevaluate_on_change`, picking a backend flips the cell from this
+  guard to a valid `qx` automatically.
+
 ## [0.2.0] - 2026-05-16
 
 **Breaking architectural reset.** A previously-drafted 0.2.0 design
