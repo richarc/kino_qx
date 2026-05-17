@@ -74,7 +74,7 @@ defmodule Kino.Qx.CredentialsCell do
   """
   use Kino.JS
   use Kino.JS.Live
-  use Kino.SmartCell, name: "Qx Credentials"
+  use Kino.SmartCell, name: "Qx Credentials", reevaluate_on_change: true
 
   alias Qx.Hardware
 
@@ -238,25 +238,62 @@ defmodule Kino.Qx.CredentialsCell do
 
   @impl true
   def to_source(attrs) do
-    portal_url = inspect(attrs["portal_base_url"] || @default_portal_base_url)
-    region = inspect(attrs["ibm_region"] || "us-south")
-    backend = inspect(attrs["last_backend_name"] || "")
-    opt_level = attrs["optimization_level"] || 1
-    shots = attrs["shots"] || 4096
+    if config_ready?(attrs) do
+      portal_url = inspect(attrs["portal_base_url"] || @default_portal_base_url)
+      region = inspect(attrs["ibm_region"] || "us-south")
+      backend = inspect(attrs["last_backend_name"])
+      # Re-validate from persisted attrs before interpolating. A shared
+      # `.livemd` is plain text — an attacker-crafted non-integer
+      # `optimization_level`/`shots` would otherwise be injected verbatim
+      # into the emitted (and, under `reevaluate_on_change`, auto-run)
+      # source. Route through the same validators the event path uses,
+      # falling back to the documented defaults on rejection.
+      opt_level = parsed_or_default(parse_optimization_level(attrs["optimization_level"]), 1)
+      shots = parsed_or_default(parse_shots(attrs["shots"]), 4096)
 
-    """
-    qx = %Qx.Hardware.Config{
-      portal_url: #{portal_url},
-      portal_token: System.fetch_env!(#{inspect(@secret_portal_token)}),
-      ibm_api_key: System.fetch_env!(#{inspect(@secret_ibm_api_key)}),
-      ibm_crn: System.fetch_env!(#{inspect(@secret_ibm_crn)}),
-      ibm_region: #{region},
-      backend: #{backend},
-      optimization_level: #{opt_level},
-      shots: #{shots}
-    }\
-    """
+      """
+      qx = %Qx.Hardware.Config{
+        portal_url: #{portal_url},
+        portal_token: System.fetch_env!(#{inspect(@secret_portal_token)}),
+        ibm_api_key: System.fetch_env!(#{inspect(@secret_ibm_api_key)}),
+        ibm_crn: System.fetch_env!(#{inspect(@secret_ibm_crn)}),
+        ibm_region: #{region},
+        backend: #{backend},
+        optimization_level: #{opt_level},
+        shots: #{shots}
+      }\
+      """
+    else
+      # D2: with no backend chosen we must NOT emit `backend: ""` (it
+      # produces a Config that 404s at run time with no actionable
+      # message). Kino has no sanctioned "skip evaluation" return, so
+      # the idiomatic fail-fast is emitting code that raises. Under
+      # `reevaluate_on_change`, picking a backend flips this guard to
+      # the struct branch and Kino auto-rebinds `qx`.
+      ~s|raise "Qx Credentials: select a backend (Connect, then choose a backend) before running."|
+    end
   end
+
+  # Decides the `to_source/1` branch: a non-blank `last_backend_name`
+  # means the user has picked a backend (ready → emit the struct);
+  # blank/missing/non-binary means not ready (→ emit the raising guard).
+  defp config_ready?(attrs), do: backend_chosen?(attrs["last_backend_name"])
+
+  defp backend_chosen?(name) when is_binary(name), do: String.trim(name) != ""
+  defp backend_chosen?(_), do: false
+
+  # Guided-sequence state for the JS panel. `step` is the step the user
+  # should act on next; `ready` is true once the cell will emit a valid
+  # `%Qx.Hardware.Config{}` (connected AND a backend chosen) rather than
+  # the raising guard. Only `true` counts as connected; anything else
+  # routes back to Step 2 (Connect). `@doc false` + public so it is unit
+  # testable without the Kino runtime (cf. `valid_ibm_region?/1`).
+  @doc false
+  @spec cell_step(any(), any()) :: %{step: 2 | 3, ready: boolean()}
+  def cell_step(true, last_backend_name),
+    do: %{step: 3, ready: backend_chosen?(last_backend_name)}
+
+  def cell_step(_connected, _last_backend_name), do: %{step: 2, ready: false}
 
   ## --------------------------------------------------------------
   ## Internals
@@ -312,7 +349,7 @@ defmodule Kino.Qx.CredentialsCell do
 
   defp parse_optimization_level(value) when is_binary(value) do
     case Integer.parse(value) do
-      {n, _} when n in 0..3 -> {:ok, n}
+      {n, ""} when n in 0..3 -> {:ok, n}
       _ -> :error
     end
   end
@@ -323,12 +360,15 @@ defmodule Kino.Qx.CredentialsCell do
 
   defp parse_shots(value) when is_binary(value) do
     case Integer.parse(value) do
-      {n, _} when n in 1..100_000 -> {:ok, n}
+      {n, ""} when n in 1..100_000 -> {:ok, n}
       _ -> :error
     end
   end
 
   defp parse_shots(_), do: :error
+
+  defp parsed_or_default({:ok, value}, _default), do: value
+  defp parsed_or_default(:error, default), do: default
 
   defp set_error(ctx, msg) do
     ctx
@@ -409,6 +449,9 @@ defmodule Kino.Qx.CredentialsCell do
   # Payload sent to the JS side. NEVER includes any token-shaped value
   # (the cell doesn't hold tokens anymore, so this is straightforward).
   defp client_payload(ctx) do
+    %{step: step, ready: ready} =
+      cell_step(ctx.assigns.connected, ctx.assigns.last_backend_name)
+
     %{
       portal_base_url: ctx.assigns.portal_base_url,
       ibm_region: ctx.assigns.ibm_region,
@@ -419,6 +462,9 @@ defmodule Kino.Qx.CredentialsCell do
       connected: ctx.assigns.connected,
       connecting: ctx.assigns.connecting,
       identity: ctx.assigns.identity,
+      # Transient guided-sequence hints — NOT in to_attrs/1.
+      step: step,
+      ready: ready,
       secret_names: %{
         portal_token: @secret_portal_token,
         ibm_api_key: @secret_ibm_api_key,
@@ -444,60 +490,88 @@ defmodule Kino.Qx.CredentialsCell do
 
       ctx.root.innerHTML = `
         <div class="qx-cell">
-          <fieldset class="qx-section">
-            <legend>Portal &amp; Region</legend>
-            <div class="qx-row">
-              <label>Portal URL</label>
-              <input id="qx-portal-url" type="text" />
-            </div>
-            <div class="qx-row">
-              <label>Region</label>
-              <select id="qx-ibm-region">
-                <option value="us-south">us-south</option>
-                <option value="eu-de">eu-de</option>
-              </select>
-            </div>
-            <div class="qx-row qx-actions">
-              <button id="qx-connect">Connect</button>
-              <span id="qx-conn-status"></span>
-            </div>
-            <div class="qx-hint" id="qx-secret-hint">
-              Connect reads Livebook secrets
-              <code id="qx-secret-portal"></code>,
-              <code id="qx-secret-key"></code>, and
-              <code id="qx-secret-crn"></code>.
-              Define them under the notebook's Secrets panel.
-            </div>
-          </fieldset>
+          <ol class="qx-steps">
+            <li class="qx-step" id="qx-step-1">
+              <div class="qx-step-head">
+                <span class="qx-step-num">1</span>
+                <span class="qx-step-title">Livebook secrets</span>
+              </div>
+              <div class="qx-step-body">
+                <div class="qx-hint" id="qx-secret-hint">
+                  This cell never asks for tokens. Define these three
+                  secrets in the notebook's <strong>Secrets</strong>
+                  panel, then continue:
+                  <code id="qx-secret-portal"></code>,
+                  <code id="qx-secret-key"></code>,
+                  <code id="qx-secret-crn"></code>.
+                </div>
+              </div>
+            </li>
 
-          <fieldset class="qx-section qx-hidden" id="qx-job-section">
-            <legend>Job defaults</legend>
-            <div class="qx-row">
-              <label>Backend</label>
-              <select id="qx-backend">
-                <option value="">— pick one —</option>
-              </select>
-            </div>
-            <div class="qx-row">
-              <label>Optimization</label>
-              <select id="qx-opt">
-                <option value="0">0</option>
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-              </select>
-            </div>
-            <div class="qx-row">
-              <label>Shots</label>
-              <input id="qx-shots" type="number" min="1" max="100000" step="1" />
-            </div>
-          </fieldset>
+            <li class="qx-step" id="qx-step-2">
+              <div class="qx-step-head">
+                <span class="qx-step-num">2</span>
+                <span class="qx-step-title">Portal &amp; region — connect</span>
+                <span id="qx-conn-status"></span>
+              </div>
+              <div class="qx-step-body">
+                <div class="qx-row">
+                  <label>Portal URL</label>
+                  <input id="qx-portal-url" type="text" />
+                </div>
+                <div class="qx-row">
+                  <label>Region</label>
+                  <select id="qx-ibm-region">
+                    <option value="us-south">us-south</option>
+                    <option value="eu-de">eu-de</option>
+                  </select>
+                </div>
+                <div class="qx-row qx-actions">
+                  <button id="qx-connect">Connect</button>
+                </div>
+              </div>
+            </li>
+
+            <li class="qx-step" id="qx-step-3">
+              <div class="qx-step-head">
+                <span class="qx-step-num">3</span>
+                <span class="qx-step-title">Job defaults</span>
+              </div>
+              <div class="qx-step-body">
+                <div class="qx-finish" id="qx-finish-hint"></div>
+                <div class="qx-row">
+                  <label>Backend</label>
+                  <select id="qx-backend">
+                    <option value="">— pick one —</option>
+                  </select>
+                </div>
+                <div class="qx-row">
+                  <label>Optimization</label>
+                  <select id="qx-opt">
+                    <option value="0">0</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                  </select>
+                </div>
+                <div class="qx-row">
+                  <label>Shots</label>
+                  <input id="qx-shots" type="number" min="1" max="100000" step="1" />
+                </div>
+              </div>
+            </li>
+          </ol>
 
           <div id="qx-error" class="qx-error qx-hidden"></div>
         </div>
       `;
 
       const $ = sel => ctx.root.querySelector(sel);
+
+      function setStepState(el, state) {
+        el.classList.remove("qx-step-active", "qx-step-done", "qx-step-locked");
+        if (state) el.classList.add(state);
+      }
 
       function applyPayload(p) {
         $("#qx-portal-url").value = p.portal_base_url || "";
@@ -530,18 +604,58 @@ defmodule Kino.Qx.CredentialsCell do
           backendSel.appendChild(opt);
         }
 
-        // Connection status
+        // Connection status (lives in step 2's head)
         const connEl = $("#qx-conn-status");
         if (p.connected && p.identity) {
           connEl.textContent = `✓ ${p.identity}`;
           connEl.className = "qx-ok";
-          $("#qx-job-section").classList.remove("qx-hidden");
         } else if (p.connecting) {
           connEl.textContent = "connecting…";
           connEl.className = "qx-pending";
         } else {
           connEl.textContent = "";
           connEl.className = "";
+        }
+
+        // Guided-sequence state. `step` (2|3) and `ready` are derived
+        // server-side in cell_step/2. Step 1 is always available;
+        // step 2 is done once connected; step 3 is locked until
+        // connected, then needs a backend to be "ready".
+        const step = p.step || 2;
+        const ready = !!p.ready;
+        const connected = !!p.connected;
+
+        setStepState($("#qx-step-1"), connected ? "qx-step-done" : "qx-step-active");
+        setStepState(
+          $("#qx-step-2"),
+          connected ? "qx-step-done" : "qx-step-active"
+        );
+
+        const step3 = $("#qx-step-3");
+        if (step !== 3) {
+          setStepState(step3, "qx-step-locked");
+        } else {
+          setStepState(step3, ready ? "qx-step-done" : "qx-step-active");
+        }
+
+        // Lock step-3 inputs until connected; this is belt-and-braces
+        // alongside the .qx-step-locked CSS (pointer-events: none).
+        ["#qx-backend", "#qx-opt", "#qx-shots"].forEach(sel => {
+          $(sel).disabled = step !== 3;
+        });
+
+        const finish = $("#qx-finish-hint");
+        if (step !== 3) {
+          finish.textContent = "Connect (step 2) first to set job defaults.";
+          finish.className = "qx-finish qx-finish-locked";
+        } else if (!ready) {
+          finish.textContent =
+            "Pick a backend to finish — the cell then binds qx automatically.";
+          finish.className = "qx-finish qx-finish-pending";
+        } else {
+          finish.textContent =
+            "✓ Ready — qx is (re)generated whenever you change a field.";
+          finish.className = "qx-finish qx-finish-ok";
         }
 
         // Error panel
@@ -596,22 +710,67 @@ defmodule Kino.Qx.CredentialsCell do
       flex-direction: column;
       gap: 12px;
     }
-    .qx-section {
+    .qx-steps {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .qx-step {
       border: 1px solid #e2e8f0;
+      border-left: 3px solid #cbd5e1;
       border-radius: 6px;
       padding: 8px 12px;
       display: flex;
       flex-direction: column;
       gap: 6px;
     }
-    .qx-section legend {
-      padding: 0 6px;
+    .qx-step-active { border-left-color: #3b82f6; }
+    .qx-step-done { border-left-color: #059669; }
+    .qx-step-locked {
+      opacity: 0.55;
+    }
+    .qx-step-locked .qx-step-body {
+      pointer-events: none;
+    }
+    .qx-step-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       color: #475569;
       font-size: 12px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
+    .qx-step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #cbd5e1;
+      color: #fff;
+      font-size: 11px;
+    }
+    .qx-step-active .qx-step-num { background: #3b82f6; }
+    .qx-step-done .qx-step-num { background: #059669; }
+    .qx-step-body {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .qx-finish {
+      font-size: 12px;
+      padding: 4px 0;
+      line-height: 1.5;
+    }
+    .qx-finish-locked { color: #94a3b8; }
+    .qx-finish-pending { color: #b45309; }
+    .qx-finish-ok { color: #059669; }
     .qx-row {
       display: flex;
       align-items: center;
@@ -648,10 +807,16 @@ defmodule Kino.Qx.CredentialsCell do
     .qx-ok { color: #059669; font-size: 13px; }
     .qx-pending { color: #b45309; font-size: 13px; }
     .qx-bad { color: #b91c1c; font-size: 13px; }
+    #qx-conn-status {
+      margin-left: auto;
+      text-transform: none;
+      letter-spacing: normal;
+      font-weight: 500;
+    }
     .qx-hint {
       color: #64748b;
       font-size: 12px;
-      padding: 4px 0 0 118px;
+      padding: 4px 0;
       line-height: 1.5;
     }
     .qx-hint code {
