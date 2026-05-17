@@ -9,6 +9,8 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-17
+
 ### Changed
 
 - **`Kino.Qx.CredentialsCell` now reevaluates on change and rebinds
@@ -37,6 +39,16 @@ is a **minor** bump on this package until v1.0.
   instruction ("select a backend …"). Combined with
   `reevaluate_on_change`, picking a backend flips the cell from this
   guard to a valid `qx` automatically.
+
+### Security
+
+- **`to_source/1` re-validates `optimization_level`/`shots` before
+  emitting them.** A shared `.livemd` is plain text; a hand-crafted
+  non-integer value would previously be interpolated verbatim into the
+  generated cell source (which, with `reevaluate_on_change`, now
+  auto-evaluates). Both fields are now routed through the existing
+  validators with a safe fallback to the documented defaults, and the
+  integer parsers reject trailing garbage.
 
 ## [0.2.0] - 2026-05-16
 
