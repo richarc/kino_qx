@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:kino_qx, "~> 0.2"},
+  {:kino_qx, path: "/Users/richarc/Development/qxquantum/kino_qx"},
   # qx is published on Hex as the `qx_sim` package (app name `:qx`).
   {:qx, "~> 0.7", hex: :qx_sim},
   # Lets Livebook render the %VegaLite{} from Qx.Draw.plot_counts/2 as
@@ -22,10 +22,10 @@ Builds a `%Qx.QuantumCircuit{}` in pure Elixir, then pipes it through
 
 The smart cell below needs **three Livebook secrets**:
 
-| Name | Where to find it |
-|------|------------------|
-| `LB_PORTAL_TOKEN` | qxportal → API keys → create a `qx_live_…` key |
-| `LB_IBM_API_KEY`  | IBM Cloud → Manage → Access (IAM) → API keys |
+| Name              | Where to find it                                             |
+| ----------------- | ------------------------------------------------------------ |
+| `LB_PORTAL_TOKEN` | qxportal → API keys → create a `qx_live_…` key         |
+| `LB_IBM_API_KEY`  | IBM Cloud → Manage → Access (IAM) → API keys           |
 | `LB_IBM_CRN`      | IBM Cloud → Resource list → your Quantum service → CRN |
 
 Add each one via the lock icon in Livebook's left sidebar before
@@ -46,10 +46,19 @@ Click **+ Smart** and pick **Qx Credentials**. Fill in:
 
 The cell emits a `qx` binding for downstream cells to use.
 
-<!-- livebook:{"attrs":"e30","kind":"Elixir.Kino.Qx.CredentialsCell","livebook_object":"smart_cell"} -->
+<!-- livebook:{"attrs":"eyJpYm1fcmVnaW9uIjoidXMtc291dGgiLCJsYXN0X2JhY2tlbmRfbmFtZSI6ImlibV9mZXoiLCJvcHRpbWl6YXRpb25fbGV2ZWwiOjEsInBvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vdGVzdC5xeHF1YW50dW0uY29tIiwic2hvdHMiOjEwMjR9","chunks":null,"kind":"Elixir.Kino.Qx.CredentialsCell","livebook_object":"smart_cell"} -->
 
 ```elixir
-# (the smart cell will replace this with the generated qx = %Qx.Hardware.Config{...})
+qx = %Qx.Hardware.Config{
+  portal_url: "https://test.qxquantum.com",
+  portal_token: System.fetch_env!("LB_PORTAL_TOKEN"),
+  ibm_api_key: System.fetch_env!("LB_IBM_API_KEY"),
+  ibm_crn: System.fetch_env!("LB_IBM_CRN"),
+  ibm_region: "us-south",
+  backend: "ibm_fez",
+  optimization_level: 1,
+  shots: 1024
+}
 ```
 
 ## Step 2 — Build a Bell pair and run it
@@ -123,3 +132,5 @@ trying to use OpenQASM 2.0 — the portal accepts 3.0 only.
 **Run fails with `Portal transpile failed (502)`**
 The circuit is too wide or deep for this backend. Try a smaller
 backend or `optimization_level: 0`.
+
+<!-- livebook:{"offset":4603,"stamp":{"token":"XCP.fjPeonw7jaOk_6u8yzxisFVxZ0sXxkwZJRmcYSxHBD_uzAAgZIlTg4pqi1vOMSbkheeoT8CJz8fR9ZvLpJyHY-OViqTZmxsYmJ5-O0ZsIelykOe3qzkoq9DMpTD80ibc92sJUdQrku3oCX47BJREDwWmyg","version":2}} -->
