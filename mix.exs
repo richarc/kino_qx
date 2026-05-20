@@ -16,7 +16,15 @@ defmodule Kino.Qx.MixProject do
       package: package(),
       docs: docs(),
       name: "Kino.Qx",
-      source_url: @source_url
+      source_url: @source_url,
+      usage_rules: usage_rules()
+    ]
+  end
+
+  defp usage_rules do
+    [
+      file: "CLAUDE.md",
+      usage_rules: [:usage_rules]
     ]
   end
 
@@ -46,7 +54,8 @@ defmodule Kino.Qx.MixProject do
       # Dev/test
       {:bypass, "~> 2.1", only: :test},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:usage_rules, "~> 1.2", only: :dev, runtime: false, override: true}
     ]
   end
 
