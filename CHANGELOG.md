@@ -9,6 +9,19 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
+### Dependencies
+
+- Added `{:usage_rules, "~> 1.2", only: :dev, runtime: false, override: true}`
+  and the `usage_rules` config block; `mix usage_rules.sync` now manages
+  the `<!-- usage-rules-start -->` block in `CLAUDE.md`.
+
+### Follow-ups
+
+- **Drop `override: true` from the `:usage_rules` dep** once a qx release
+  ships with `usage_rules` marked `only: :dev, runtime: false` (fix
+  landed on qx `main` in commit `1e8ad8b`; published qx 0.7.1 still
+  forces `usage_rules ~> 0.1` on consumers).
+
 ## [0.3.0] - 2026-05-17
 
 ### Changed
