@@ -14,7 +14,7 @@ defmodule Kino.Qx do
 
       circuit
       |> Kino.Qx.run!(qx)
-      |> Qx.Draw.plot_counts(title: "Bell state")
+      |> Qx.draw_counts(title: "Bell state")
 
   See `run/3` and `run!/3`. Non-Livebook callers can use
   `Qx.Hardware.run/3` directly from the `:qx` library — `Kino.Qx.run/3`
@@ -46,11 +46,11 @@ defmodule Kino.Qx do
   @doc """
   Like `run/3` but raises `Kino.Qx.RunError` on failure and returns
   the bare `%Qx.SimulationResult{}` so the result pipes cleanly into
-  `Qx.Draw.plot_counts/2`.
+  `Qx.draw_counts/2`.
 
       circuit
       |> Kino.Qx.run!(qx)
-      |> Qx.Draw.plot_counts(title: "Bell state")
+      |> Qx.draw_counts(title: "Bell state")
   """
   @spec run!(Qx.QuantumCircuit.t(), Hardware.Config.t(), keyword()) ::
           Qx.SimulationResult.t()

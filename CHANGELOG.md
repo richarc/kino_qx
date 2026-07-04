@@ -11,6 +11,12 @@ is a **minor** bump on this package until v1.0.
 
 ### Dependencies
 
+- Bumped `qx` to `{:qx, "~> 0.10", hex: :qx_sim}` (from `~> 0.7.1`).
+  No code changes needed: the smart cell's generated source and the
+  run surface are untouched by qx 0.10's draw rework. Doc examples and
+  the demo notebook now use `Qx.draw_counts/2`, the 0.10 facade name
+  for the renamed `Qx.Draw.plot_counts/2`.
+
 - Added `{:usage_rules, "~> 1.2", only: :dev, runtime: false, override: true}`
   and the `usage_rules` config block; `mix usage_rules.sync` now manages
   the `<!-- usage-rules-start -->` block in `CLAUDE.md`.

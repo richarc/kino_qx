@@ -27,7 +27,7 @@ defmodule Kino.Qx.CredentialsCell do
       # Cell 2: regular Elixir
       circuit
       |> Kino.Qx.run!(qx)
-      |> Qx.Draw.plot_counts(title: "Bell state")
+      |> Qx.draw_counts(title: "Bell state")
 
   ## Privacy invariant
 

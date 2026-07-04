@@ -19,7 +19,7 @@ End-to-end pipeline:
 ```elixir
 circuit
 |> Kino.Qx.run!(qx)
-|> Qx.Draw.plot_counts(title: "Bell state")
+|> Qx.draw_counts(title: "Bell state")
 ```
 
 ## Status
@@ -101,7 +101,7 @@ circuit =
 
 circuit
 |> Kino.Qx.run!(qx)
-|> Qx.Draw.plot_counts(title: "Bell state")
+|> Qx.draw_counts(title: "Bell state")
 ```
 
 A live `Kino.Frame` status panel renders above the result while the
