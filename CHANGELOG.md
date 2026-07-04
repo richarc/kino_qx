@@ -9,6 +9,8 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-04
+
 ### Dependencies
 
 - Bumped `qx` to `{:qx, "~> 0.10", hex: :qx_sim}` (from `~> 0.7.1`).
@@ -16,17 +18,11 @@ is a **minor** bump on this package until v1.0.
   run surface are untouched by qx 0.10's draw rework. Doc examples and
   the demo notebook now use `Qx.draw_counts/2`, the 0.10 facade name
   for the renamed `Qx.Draw.plot_counts/2`.
-
-- Added `{:usage_rules, "~> 1.2", only: :dev, runtime: false, override: true}`
-  and the `usage_rules` config block; `mix usage_rules.sync` now manages
-  the `<!-- usage-rules-start -->` block in `CLAUDE.md`.
-
-### Follow-ups
-
-- **Drop `override: true` from the `:usage_rules` dep** once a qx release
-  ships with `usage_rules` marked `only: :dev, runtime: false` (fix
-  landed on qx `main` in commit `1e8ad8b`; published qx 0.7.1 still
-  forces `usage_rules ~> 0.1` on consumers).
+- Added `{:usage_rules, "~> 1.2", only: :dev, runtime: false}` and the
+  `usage_rules` config block; `mix usage_rules.sync` now manages the
+  `<!-- usage-rules-start -->` block in `CLAUDE.md`. The `override:
+  true` it initially needed is gone: qx 0.10 ships `usage_rules` as a
+  dev-only dep, closing the follow-up recorded here.
 
 ## [0.3.0] - 2026-05-17
 

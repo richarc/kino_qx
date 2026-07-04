@@ -1,7 +1,7 @@
 defmodule Kino.Qx.MixProject do
   use Mix.Project
 
-  @version "0.3.0"
+  @version "0.4.0"
   @source_url "https://github.com/richarc/kino_qx"
 
   def project do
@@ -43,8 +43,6 @@ defmodule Kino.Qx.MixProject do
       # Runtime
       {:kino, "~> 0.19"},
       # qx is published on Hex as the `qx_sim` package (app name `:qx`).
-      # `~> 0.7` resolves to 0.7.1, which carries the connect/2 discovery
-      # fix + Config Inspect redaction this cell depends on (plan §9.2).
       {:qx, "~> 0.10", hex: :qx_sim},
       {:req, "~> 0.5"},
       # Jason arrives transitively via Kino, but pin explicitly so the
@@ -55,7 +53,7 @@ defmodule Kino.Qx.MixProject do
       {:bypass, "~> 2.1", only: :test},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:usage_rules, "~> 1.2", only: :dev, runtime: false, override: true}
+      {:usage_rules, "~> 1.2", only: :dev, runtime: false}
     ]
   end
 
