@@ -9,6 +9,27 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
+### Dependencies
+
+- Bumped `qx` to `{:qx, "~> 0.11", hex: :qx_sim}` (from `~> 0.10`).
+  No code changes needed. kino_qx uses only stable qx surface —
+  `Qx.create_circuit/1,2`, `Qx.h/2`, `Qx.cx/3`, `Qx.measure/3`,
+  `Qx.run/2`, `Qx.draw_counts/2`, `Qx.version/0` and the tier-2
+  `Qx.Hardware` API — none of which qx 0.11 changed, and none of which
+  is on qx's deprecated-at-1.0 list (`barrier_all/2`,
+  `superposition/1`, `QuantumCircuit.get_state/1`, Register-input
+  `draw_state`). References to the tier-3 `Qx.Hardware.Ibm` /
+  `Qx.Hardware.Portal` are documentation only, not call sites.
+  Verification unchanged from the 0.10 baseline: 73 tests, 1 doctest,
+  4 excluded (live-network tags).
+- Transitive deps re-resolved by the same `mix deps.get`, worth noting
+  separately since they were not the target of this change:
+  `nx` 0.12.1 → **0.13.0** (a minor bump of the numerical core; qx
+  declares `~> 0.12`, which permits it), `mint` 1.9.0 → 1.9.3,
+  `hpax` 1.0.3 → 1.0.4, `plug` 1.20.2 → 1.20.3, `req` 0.6.2 → 0.6.3.
+  The `mint` move incidentally clears CVE-2026-58229 / -59246 / -59249,
+  the same advisories patched upstream in qx on 2026-07-21.
+
 ## [0.4.0] - 2026-07-04
 
 ### Dependencies

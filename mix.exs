@@ -43,7 +43,7 @@ defmodule Kino.Qx.MixProject do
       # Runtime
       {:kino, "~> 0.19"},
       # qx is published on Hex as the `qx_sim` package (app name `:qx`).
-      {:qx, "~> 0.10", hex: :qx_sim},
+      {:qx, "~> 0.11", hex: :qx_sim},
       {:req, "~> 0.5"},
       # Jason arrives transitively via Kino, but pin explicitly so the
       # smart cell's encode/decode behaviour can't drift if Kino
