@@ -438,11 +438,14 @@ defmodule Kino.Qx.CredentialsCell do
   # Don't echo arbitrary HTTP bodies into the cell error UI — IBM IAM
   # 4xx bodies have echoed apikeys before, and Req exception messages
   # can carry full URLs (with credentials).
-  defp redact_reason(:unauthorized), do: "unauthorized"
+  #
+  # :unauthorized, {:rate_limited, _}, and {:network, _} are NOT handled
+  # here — connect_error_message/1's earlier clauses (:unauthorized,
+  # {:rate_limited, secs}, {:network, _reason}) already intercept those
+  # shapes before falling through to the catch-all that calls this
+  # function, so clauses for them here would be unreachable dead code.
   defp redact_reason(:not_found), do: "not found"
-  defp redact_reason({:rate_limited, secs}) when is_integer(secs), do: "rate limited (#{secs}s)"
   defp redact_reason({:http, status, _body}), do: "HTTP #{status}"
-  defp redact_reason({:network, _reason}), do: "network failure"
   defp redact_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp redact_reason(_), do: "unexpected error"
 
