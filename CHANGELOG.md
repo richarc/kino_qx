@@ -11,6 +11,25 @@ is a **minor** bump on this package until v1.0.
 
 ### Dependencies
 
+- Bumped `qx` to `{:qx, "~> 0.13.1", hex: :qx_sim}` (from `~> 0.11`); the
+  lock moves from qx 0.11.0 to 0.13.1. The requirement is now
+  three-segment so that a qx minor release, which may break below 1.0,
+  is never picked up untested: `~> 0.13.1` accepts 0.13.x from 0.13.1
+  and stops before 0.14. No code changes
+  needed. kino_qx calls `Qx.draw_counts/2` with `:title` only, which
+  qx 0.13 still accepts (0.13 raises `Qx.OptionError` for an option it
+  does not know), and the rest of the surface it uses is unchanged.
+  Charts and circuit diagrams drawn through qx have the 0.13 look.
+  Verification unchanged: 73 tests, 1 doctest, 4 excluded (live-network
+  tags).
+- Transitive deps re-resolved by the same `mix deps.update qx`, noted
+  separately since they were not the target: `req` 0.6.3 → **0.7.5** (a
+  minor bump of the HTTP client kino_qx calls directly; its requirement
+  `~> 0.5` permits it and the suite passes), `mint` 1.9.3 → 1.11.0,
+  `finch` 0.23.0 → 0.25.0, `nx` 0.13.0 → 0.13.1, `kino` 0.19.0 → 0.19.1,
+  `plug` 1.20.3 → 1.20.4, `plug_crypto` 2.1.1 → 2.2.1, `hpax` 1.0.4 →
+  1.1.0, `nimble_options` 1.1.1 → 1.2.0, `nimble_pool` 1.1.0 → 1.2.0,
+  `telemetry` 1.4.2 → 1.4.3.
 - Bumped `qx` to `{:qx, "~> 0.11", hex: :qx_sim}` (from `~> 0.10`).
   No code changes needed. kino_qx uses only stable qx surface —
   `Qx.create_circuit/1,2`, `Qx.h/2`, `Qx.cx/3`, `Qx.measure/3`,
