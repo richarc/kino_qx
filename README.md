@@ -42,7 +42,7 @@ In a Livebook setup cell:
 
 ```elixir
 Mix.install([
-  {:kino_qx, "~> 0.4"},
+  {:kino_qx, "~> 0.5"},
   {:qx, "~> 0.13.1", hex: :qx_sim}
 ])
 ```

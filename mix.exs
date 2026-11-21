@@ -1,7 +1,7 @@
 defmodule Kino.Qx.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.5.0"
   @source_url "https://github.com/richarc/kino_qx"
 
   def project do

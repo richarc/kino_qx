@@ -9,6 +9,18 @@ is a **minor** bump on this package until v1.0.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-21
+
+A dependency release. kino_qx's own API is unchanged, but the qx
+requirement moves from `~> 0.10` (in 0.4.0) to `~> 0.13.1`, so
+notebooks must install qx 0.13.1 or later in the 0.13 series. That
+dropped support for older qx is why this is a minor bump.
+
+### Changed
+
+- Internal: removed three unreachable `redact_reason/1` clauses. No
+  behaviour change.
+
 ### Dependencies
 
 - Bumped `qx` to `{:qx, "~> 0.13.1", hex: :qx_sim}` (from `~> 0.11`); the
@@ -208,6 +220,9 @@ library (0.7.0); `kino_qx` is now a thin UX layer.
   - Default portal URL `https://qxportal.dev`.
   - Minimum Elixir `~> 1.17`.
 
-[Unreleased]: https://github.com/richarc/kino_qx/compare/v0.2.0..HEAD
+[Unreleased]: https://github.com/richarc/kino_qx/compare/v0.5.0..HEAD
+[0.5.0]: https://github.com/richarc/kino_qx/releases/tag/v0.5.0
+[0.4.0]: https://github.com/richarc/kino_qx/releases/tag/v0.4.0
+[0.3.0]: https://github.com/richarc/kino_qx/releases/tag/v0.3.0
 [0.2.0]: https://github.com/richarc/kino_qx/releases/tag/v0.2.0
 [0.1.0]: https://github.com/richarc/kino_qx/releases/tag/v0.1.0
